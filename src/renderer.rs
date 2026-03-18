@@ -4,6 +4,7 @@ use ratatui_core::{
 };
 
 use crate::component::{Component, EventResult, Tracked, VStack};
+use crate::element::Elements;
 use crate::frame::Frame;
 use crate::node::{Node, NodeId};
 
@@ -203,27 +204,48 @@ impl Renderer {
             self.nodes[parent.0].children.retain(|&child| child != id);
         }
 
-        // Collect all descendants to mark as removed
-        let mut to_remove = vec![id];
-        let mut i = 0;
-        while i < to_remove.len() {
-            let node_id = to_remove[i];
-            let children = self.nodes[node_id.0].children.clone();
-            to_remove.extend(children);
-            i += 1;
+        self.tombstone_subtree(id);
+    }
+
+    /// Replace all children of `parent` with nodes built from `elements`.
+    ///
+    /// Existing children are removed. New nodes are created from the
+    /// element descriptions. This is the core of the declarative layer:
+    /// view functions return `Elements`, and `rebuild` materializes them.
+    ///
+    /// ```ignore
+    /// fn my_view(state: &AppState) -> Elements {
+    ///     let mut els = Elements::new();
+    ///     els.add(TextBlockEl::new().unstyled("Hello"));
+    ///     els
+    /// }
+    ///
+    /// renderer.rebuild(container, my_view(&state));
+    /// ```
+    pub fn rebuild(&mut self, parent: NodeId, elements: Elements) {
+        // Remove all existing children — clear the parent's list first,
+        // then tombstone each subtree (avoids O(n²) retain calls).
+        let old_children: Vec<NodeId> = std::mem::take(&mut self.nodes[parent.0].children);
+        for child_id in old_children {
+            self.tombstone_subtree(child_id);
         }
 
-        // Mark removed nodes: clear their children and parent, set frozen
-        // We can't remove from the Vec without invalidating NodeIds,
-        // so we "tombstone" them by clearing children and setting height to 0.
-        for node_id in to_remove {
-            let node = &mut self.nodes[node_id.0];
-            node.children.clear();
-            node.parent = None;
-            node.frozen = true;
-            node.last_height = Some(0);
-            node.cached_buffer = None;
+        // Build new children from elements
+        elements.build_into(self, parent);
+    }
+
+    /// Tombstone a node and all its descendants without touching the
+    /// parent's children list (caller is responsible for that).
+    fn tombstone_subtree(&mut self, id: NodeId) {
+        let children = std::mem::take(&mut self.nodes[id.0].children);
+        for child_id in children {
+            self.tombstone_subtree(child_id);
         }
+        let node = &mut self.nodes[id.0];
+        node.parent = None;
+        node.frozen = true;
+        node.last_height = Some(0);
+        node.cached_buffer = None;
     }
 
     /// Set the rendering width (e.g., on terminal resize).
@@ -897,5 +919,184 @@ mod tests {
 
         r.handle_event(&tab_event());
         assert_eq!(r.focus(), None);
+    }
+
+    // --- Declarative rebuild tests ---
+
+    use crate::element::{Element, Elements};
+
+    /// A simple element for testing that creates a TextBlock with given lines.
+    struct TestTextEl {
+        lines: Vec<String>,
+    }
+
+    impl TestTextEl {
+        fn new(text: &str) -> Self {
+            Self { lines: vec![text.to_string()] }
+        }
+    }
+
+    impl Element for TestTextEl {
+        fn build(self: Box<Self>, renderer: &mut Renderer, parent: NodeId) -> NodeId {
+            let id = renderer.append_child(parent, TextBlock);
+            for line in self.lines {
+                renderer.state_mut::<TextBlock>(id).push(line);
+            }
+            id
+        }
+    }
+
+    #[test]
+    fn rebuild_replaces_children() {
+        let mut r = Renderer::new(10);
+        let container = r.push(VStack);
+
+        // Initially add two children imperatively
+        let c1 = r.append_child(container, TextBlock);
+        r.state_mut::<TextBlock>(c1).push("old1".to_string());
+        let c2 = r.append_child(container, TextBlock);
+        r.state_mut::<TextBlock>(c2).push("old2".to_string());
+
+        let frame1 = r.render();
+        assert_eq!(frame1.area().height, 2);
+
+        // Rebuild with a single new child
+        let mut els = Elements::new();
+        els.add(TestTextEl::new("new1"));
+        r.rebuild(container, els);
+
+        let frame2 = r.render();
+        assert_eq!(frame2.area().height, 1);
+        assert_eq!(frame2.buffer()[(0, 0)].symbol(), "n"); // "new1"
+    }
+
+    #[test]
+    fn rebuild_with_nested_children() {
+        let mut r = Renderer::new(10);
+        let container = r.push(VStack);
+
+        // Build a nested structure: VStack with two text blocks
+        let mut inner = Elements::new();
+        inner.add(TestTextEl::new("child1"));
+        inner.add(TestTextEl::new("child2"));
+
+        let mut els = Elements::new();
+        els.add_with_children(crate::elements::VStackEl, inner);
+        r.rebuild(container, els);
+
+        let frame = r.render();
+        assert_eq!(frame.area().height, 2);
+        assert_eq!(frame.buffer()[(0, 0)].symbol(), "c"); // "child1"
+        assert_eq!(frame.buffer()[(0, 1)].symbol(), "c"); // "child2"
+    }
+
+    #[test]
+    fn rebuild_with_empty_elements_clears_children() {
+        let mut r = Renderer::new(10);
+        let container = r.push(VStack);
+
+        let c = r.append_child(container, TextBlock);
+        r.state_mut::<TextBlock>(c).push("exists".to_string());
+
+        let frame1 = r.render();
+        assert_eq!(frame1.area().height, 1);
+
+        // Rebuild with empty elements
+        r.rebuild(container, Elements::new());
+
+        let frame2 = r.render();
+        assert_eq!(frame2.area().height, 0);
+    }
+
+    #[test]
+    fn rebuild_view_function_pattern() {
+        // Simulate a view function that produces different trees based on state
+        fn view(thinking: bool) -> Elements {
+            let mut els = Elements::new();
+            if thinking {
+                els.add(TestTextEl::new("thinking..."));
+            }
+            els.add(TestTextEl::new("message"));
+            els
+        }
+
+        let mut r = Renderer::new(10);
+        let container = r.push(VStack);
+
+        // Thinking state
+        r.rebuild(container, view(true));
+        let frame1 = r.render();
+        assert_eq!(frame1.area().height, 2);
+        assert_eq!(frame1.buffer()[(0, 0)].symbol(), "t"); // "thinking..."
+
+        // Not thinking
+        r.rebuild(container, view(false));
+        let frame2 = r.render();
+        assert_eq!(frame2.area().height, 1);
+        assert_eq!(frame2.buffer()[(0, 0)].symbol(), "m"); // "message"
+    }
+
+    #[test]
+    fn rebuild_with_group() {
+        let mut r = Renderer::new(10);
+        let container = r.push(VStack);
+
+        let mut children = Elements::new();
+        children.add(TestTextEl::new("grouped1"));
+        children.add(TestTextEl::new("grouped2"));
+
+        let mut els = Elements::new();
+        els.add(TestTextEl::new("before"));
+        els.group(children);
+        els.add(TestTextEl::new("after"));
+        r.rebuild(container, els);
+
+        let frame = r.render();
+        assert_eq!(frame.area().height, 4);
+        assert_eq!(frame.buffer()[(0, 0)].symbol(), "b"); // "before"
+        assert_eq!(frame.buffer()[(0, 1)].symbol(), "g"); // "grouped1"
+        assert_eq!(frame.buffer()[(0, 2)].symbol(), "g"); // "grouped2"
+        assert_eq!(frame.buffer()[(0, 3)].symbol(), "a"); // "after"
+    }
+
+    #[test]
+    fn custom_element_impl_works() {
+        struct CustomWidget;
+
+        impl Component for CustomWidget {
+            type State = String;
+            fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
+                let line = ratatui_core::text::Line::raw(state.as_str());
+                ratatui_core::widgets::Widget::render(Paragraph::new(line), area, buf);
+            }
+            fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
+                if state.is_empty() { 0 } else { 1 }
+            }
+            fn initial_state(&self) -> String {
+                String::new()
+            }
+        }
+
+        struct CustomWidgetEl { config: String }
+
+        impl Element for CustomWidgetEl {
+            fn build(self: Box<Self>, renderer: &mut Renderer, parent: NodeId) -> NodeId {
+                let id = renderer.append_child(parent, CustomWidget);
+                let state = renderer.state_mut::<CustomWidget>(id);
+                state.push_str(&self.config);
+                id
+            }
+        }
+
+        let mut r = Renderer::new(10);
+        let container = r.push(VStack);
+
+        let mut els = Elements::new();
+        els.add(CustomWidgetEl { config: "custom!".to_string() });
+        r.rebuild(container, els);
+
+        let frame = r.render();
+        assert_eq!(frame.area().height, 1);
+        assert_eq!(frame.buffer()[(0, 0)].symbol(), "c"); // "custom!"
     }
 }

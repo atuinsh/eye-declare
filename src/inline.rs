@@ -1,4 +1,5 @@
 use crate::component::{Component, EventResult, Tracked};
+use crate::element::Elements;
 use crate::escape::CursorState;
 use crate::frame::Frame;
 use crate::node::NodeId;
@@ -61,6 +62,11 @@ impl InlineRenderer {
     /// List the children of a node.
     pub fn children(&self, id: NodeId) -> &[NodeId] {
         self.renderer.children(id)
+    }
+
+    /// Replace the children of `parent` with nodes built from `elements`.
+    pub fn rebuild(&mut self, parent: NodeId, elements: Elements) {
+        self.renderer.rebuild(parent, elements)
     }
 
     /// Set which component has focus for event routing.

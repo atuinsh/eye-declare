@@ -4,6 +4,7 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::component::{Component, Tracked};
+use crate::element::Elements;
 use crate::inline::InlineRenderer;
 use crate::node::NodeId;
 
@@ -72,6 +73,11 @@ impl Terminal {
 
     pub fn children(&self, id: NodeId) -> &[NodeId] {
         self.renderer.children(id)
+    }
+
+    /// Replace the children of `parent` with nodes built from `elements`.
+    pub fn rebuild(&mut self, parent: NodeId, elements: Elements) {
+        self.renderer.rebuild(parent, elements)
     }
 
     pub fn set_focus(&mut self, id: NodeId) {
