@@ -94,22 +94,10 @@ impl Component for Input {
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD);
         let text_style = Style::default().fg(Color::White);
-        let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
-
-        let label_text = format!("{}: ", state.label);
-        let (before, after) = state.text.split_at(state.cursor);
-        let cursor_char = after.chars().next().unwrap_or(' ');
-        let rest = if after.len() > cursor_char.len_utf8() {
-            &after[cursor_char.len_utf8()..]
-        } else {
-            ""
-        };
 
         let spans = vec![
-            Span::styled(label_text, label_style),
-            Span::styled(before.to_string(), text_style),
-            Span::styled(cursor_char.to_string(), cursor_style),
-            Span::styled(rest.to_string(), text_style),
+            Span::styled(format!("{}: ", state.label), label_style),
+            Span::styled(state.text.clone(), text_style),
         ];
 
         let wrapped_lines = char_wrap_line(spans, area.width);

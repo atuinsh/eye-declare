@@ -83,24 +83,15 @@ impl Component for Input {
     type State = InputState;
 
     fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
-        let (before, after) = state.text.split_at(state.cursor);
-        let cursor_char = after.chars().next().unwrap_or(' ');
-        let rest = if after.len() > cursor_char.len_utf8() {
-            &after[cursor_char.len_utf8()..]
-        } else {
-            ""
-        };
+        // Render label + text as plain styled spans.
+        // The hardware cursor (positioned by cursor_position) provides
+        // the insertion point indicator — no visual cursor character needed.
         let spans = vec![
             Span::styled(
                 format!("{}: ", state.label),
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(before.to_string(), Style::default().fg(Color::White)),
-            Span::styled(
-                cursor_char.to_string(),
-                Style::default().fg(Color::Black).bg(Color::White),
-            ),
-            Span::styled(rest.to_string(), Style::default().fg(Color::White)),
+            Span::styled(state.text.clone(), Style::default().fg(Color::White)),
         ];
         let lines = char_wrap_spans(spans, area.width);
         for (i, line) in lines.into_iter().enumerate() {
@@ -114,8 +105,8 @@ impl Component for Input {
         if width == 0 { return 0; }
         let label_w = state.label.chars().count() as u16 + 2;
         let text_w: u16 = state.text.chars().map(|c| UnicodeWidthChar::width(c).unwrap_or(0) as u16).sum();
-        let cursor_extra = if state.cursor >= state.text.len() { 1u16 } else { 0 };
-        let total = label_w + text_w + cursor_extra;
+        let total = label_w + text_w;
+        if total == 0 { return 1; }
         ((total as u32 + width as u32 - 1) / width as u32).max(1) as u16
     }
 
