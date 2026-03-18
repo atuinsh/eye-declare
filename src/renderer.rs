@@ -111,13 +111,21 @@ impl Renderer {
     }
 
     /// Set the rendering width (e.g., on terminal resize).
-    /// Invalidates all cached buffers since wrapping changes.
+    /// Invalidates all cached buffers and marks all non-frozen nodes
+    /// dirty so they re-render at the new width.
     pub fn set_width(&mut self, width: u16) {
         if self.width != width {
             self.width = width;
             for node in &mut self.nodes {
                 node.cached_buffer = None;
                 node.last_height = None;
+                // Force dirty so non-frozen nodes re-render even if
+                // state wasn't mutated via DerefMut
+                if !node.frozen {
+                    // We can't call DerefMut on the type-erased state,
+                    // so we need a force_dirty method
+                    node.force_dirty = true;
+                }
             }
         }
     }
@@ -176,7 +184,8 @@ impl Renderer {
         let is_container = node.is_container();
 
         // Frozen or clean leaf: use cached buffer
-        if node.frozen || (!is_container && !node.state.is_dirty()) {
+        let needs_render = node.force_dirty || node.state.is_dirty();
+        if node.frozen || (!is_container && !needs_render) {
             if let Some(ref cached) = node.cached_buffer {
                 copy_buffer(cached, buffer, area);
             }
@@ -207,6 +216,7 @@ impl Renderer {
             self.nodes[id.0].cached_buffer = Some(node_buf);
             self.nodes[id.0].last_height = Some(area.height);
             self.nodes[id.0].state.clear_dirty();
+            self.nodes[id.0].force_dirty = false;
         } else {
             // Leaf: render the component
             let state = self.nodes[id.0].state.inner_as_any();
@@ -218,6 +228,7 @@ impl Renderer {
             self.nodes[id.0].cached_buffer = Some(node_buf);
             self.nodes[id.0].last_height = Some(area.height);
             self.nodes[id.0].state.clear_dirty();
+            self.nodes[id.0].force_dirty = false;
         }
     }
 }

@@ -63,9 +63,43 @@ impl InlineRenderer {
         self.renderer.children(id)
     }
 
-    /// Set the rendering width.
-    pub fn set_width(&mut self, width: u16) {
-        self.renderer.set_width(width);
+    /// Handle a terminal resize.
+    ///
+    /// After a width change, the terminal has already reflowed existing
+    /// content, making our cursor tracking invalid. This clears the
+    /// visible screen (preserving scrollback), homes the cursor, and
+    /// does a full re-render at the new width.
+    ///
+    /// Scrollback content from before the resize stays at the old
+    /// wrapping — this is the same tradeoff pi-tui and Codex tui2 make.
+    ///
+    /// Note: A smoother resize experience is possible when a host like
+    /// Atuin Hex is available. Hex's shadow vt100 parser knows the actual
+    /// post-reflow terminal state, so it can diff against eye_declare's
+    /// fresh render and write only changed cells — no screen clear needed.
+    /// For standalone use (no host), this clear-and-redraw is the fallback.
+    ///
+    /// Returns escape sequences to write to the terminal.
+    pub fn resize(&mut self, new_width: u16) -> Vec<u8> {
+        let mut output = Vec::new();
+
+        // Clear visible screen and home cursor.
+        // \x1b[2J = clear entire screen
+        // \x1b[H  = cursor to row 1, col 1 (home)
+        // This does NOT clear scrollback (\x1b[3J would do that).
+        output.extend_from_slice(b"\x1b[2J\x1b[H");
+
+        // Reset internal state
+        self.renderer.set_width(new_width);
+        self.cursor = CursorState::new();
+        self.prev_frame = None;
+        self.emitted_rows = 0;
+
+        // Do a fresh render
+        let render_output = self.render();
+        output.extend_from_slice(&render_output);
+
+        output
     }
 
     /// Render the current state and return bytes to write to the terminal.

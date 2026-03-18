@@ -74,6 +74,9 @@ pub(crate) struct Node {
     pub last_height: Option<u16>,
     pub children: Vec<NodeId>,
     pub parent: Option<NodeId>,
+    /// Set by the framework to force re-render (e.g., after width change).
+    /// Cleared after rendering.
+    pub force_dirty: bool,
 }
 
 impl Node {
@@ -87,6 +90,7 @@ impl Node {
             last_height: None,
             children: Vec::new(),
             parent: None,
+            force_dirty: false,
         }
     }
 

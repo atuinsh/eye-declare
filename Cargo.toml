@@ -5,6 +5,6 @@ edition = "2024"
 
 [dependencies]
 ratatui-core = "0.1"
-ratatui-widgets = "0.3"
+ratatui-widgets = { version = "0.3", features = ["unstable-rendered-line-info"] }
 crossterm = "0.29"
 unicode-width = "0.2"
