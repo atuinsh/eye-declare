@@ -1,14 +1,14 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub mod component;
+pub mod escape;
+pub mod frame;
+pub mod inline;
+pub mod node;
+pub mod renderer;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+// Re-export key types at the crate root for convenience
+pub use component::{Component, EventResult, Tracked};
+pub use escape::CursorState;
+pub use frame::{Diff, Frame};
+pub use inline::InlineRenderer;
+pub use node::NodeId;
+pub use renderer::Renderer;
