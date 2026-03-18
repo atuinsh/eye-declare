@@ -60,10 +60,10 @@ fn char_wrap_line(spans: Vec<Span<'_>>, width: u16) -> Vec<Line<'_>> {
             if col + ch_w > width {
                 // Flush current chunk to the current line
                 if !current_chunk.is_empty() {
-                    lines.last_mut().unwrap().push(Span::styled(
-                        current_chunk.clone(),
-                        style,
-                    ));
+                    lines
+                        .last_mut()
+                        .unwrap()
+                        .push(Span::styled(current_chunk.clone(), style));
                     current_chunk.clear();
                 }
                 // Start new line
@@ -76,7 +76,10 @@ fn char_wrap_line(spans: Vec<Span<'_>>, width: u16) -> Vec<Line<'_>> {
 
         // Flush remaining chunk
         if !current_chunk.is_empty() {
-            lines.last_mut().unwrap().push(Span::styled(current_chunk, style));
+            lines
+                .last_mut()
+                .unwrap()
+                .push(Span::styled(current_chunk, style));
         }
     }
 
@@ -87,7 +90,9 @@ impl Component for Input {
     type State = InputState;
 
     fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
-        let label_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+        let label_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
         let text_style = Style::default().fg(Color::White);
         let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
 
@@ -122,9 +127,17 @@ impl Component for Input {
         }
         let label_width = state.label.chars().count() as u16 + 2; // ": "
         // +1 for the cursor character (space if at end)
-        let cursor_extra = if state.cursor >= state.text.len() { 1 } else { 0 };
+        let cursor_extra = if state.cursor >= state.text.len() {
+            1
+        } else {
+            0
+        };
         let total_cols: u16 = label_width
-            + state.text.chars().map(|c| UnicodeWidthChar::width(c).unwrap_or(0) as u16).sum::<u16>()
+            + state
+                .text
+                .chars()
+                .map(|c| UnicodeWidthChar::width(c).unwrap_or(0) as u16)
+                .sum::<u16>()
             + cursor_extra;
 
         if total_cols == 0 {
@@ -251,7 +264,9 @@ fn main() -> io::Result<()> {
         let s = r.state_mut::<TextBlock>(header);
         s.push(
             "Interactive Input Demo",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         );
         s.push(
             "Type a message and press Enter to submit. Ctrl+C to exit.",
@@ -267,7 +282,9 @@ fn main() -> io::Result<()> {
 
     // Spacer
     let spacer = r.push(TextBlock);
-    { r.state_mut::<TextBlock>(spacer).push("", Style::default()); }
+    {
+        r.state_mut::<TextBlock>(spacer).push("", Style::default());
+    }
 
     // Input field
     let input_id = r.push(Input);
