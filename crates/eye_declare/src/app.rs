@@ -1,6 +1,6 @@
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -113,10 +113,7 @@ impl<S: Send + 'static> ApplicationBuilder<S> {
     ///     state.messages.remove(0); // evict from front
     /// })
     /// ```
-    pub fn on_commit(
-        mut self,
-        f: impl FnMut(&CommittedElement, &mut S) + 'static,
-    ) -> Self {
+    pub fn on_commit(mut self, f: impl FnMut(&CommittedElement, &mut S) + 'static) -> Self {
         self.on_commit = Some(Box::new(f));
         self
     }
@@ -471,7 +468,9 @@ impl<S: Send + 'static> Application<S> {
             return;
         }
 
-        let committed = self.inline.detect_committed(self.container, terminal_height);
+        let committed = self
+            .inline
+            .detect_committed(self.container, terminal_height);
         if committed.is_empty() {
             return;
         }
@@ -495,15 +494,16 @@ impl<S: Send + 'static> Application<S> {
         self.dirty = true;
 
         // Drop committed nodes and adjust frame tracking
-        self.inline.commit(self.container, committed.len(), committed_height);
+        self.inline
+            .commit(self.container, committed.len(), committed_height);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::text::TextBlock;
     use crate::components::spinner::Spinner;
+    use crate::components::text::TextBlock;
     use ratatui_core::style::Style;
 
     fn text_view(state: &Vec<String>) -> Elements {
@@ -580,10 +580,7 @@ mod tests {
             .state(0u32)
             .view(|n: &u32| {
                 let mut els = Elements::new();
-                els.add(TextBlock::new().line(
-                    &format!("count: {}", n),
-                    Style::default(),
-                ));
+                els.add(TextBlock::new().line(&format!("count: {}", n), Style::default()));
                 els
             })
             .width(20)
@@ -691,10 +688,7 @@ mod tests {
             .state(0u32)
             .view(|n: &u32| {
                 let mut els = Elements::new();
-                els.add(TextBlock::new().line(
-                    &format!("count: {}", n),
-                    Style::default(),
-                ));
+                els.add(TextBlock::new().line(&format!("count: {}", n), Style::default()));
                 els
             })
             .width(20)
@@ -782,10 +776,7 @@ mod tests {
             .state(0u32)
             .view(|n: &u32| {
                 let mut els = Elements::new();
-                els.add(TextBlock::new().line(
-                    &format!("count: {}", n),
-                    Style::default(),
-                ));
+                els.add(TextBlock::new().line(&format!("count: {}", n), Style::default()));
                 els
             })
             .width(20)
@@ -815,7 +806,11 @@ mod tests {
         let keys_clone = committed_keys.clone();
 
         let (mut app, _handle) = Application::builder()
-            .state(vec!["line1".to_string(), "line2".to_string(), "line3".to_string()])
+            .state(vec![
+                "line1".to_string(),
+                "line2".to_string(),
+                "line3".to_string(),
+            ])
             .view(|lines: &Vec<String>| {
                 let mut els = Elements::new();
                 for (i, line) in lines.iter().enumerate() {
@@ -876,7 +871,10 @@ mod tests {
 
         // Terminal height 10, emitted 1 row — nothing in scrollback
         app.check_commits_with_height(10);
-        assert_eq!(committed_count.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert_eq!(
+            committed_count.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
     }
 
     #[test]
@@ -936,7 +934,10 @@ mod tests {
 
         // 5 rows emitted, terminal height 2 → 3 rows in scrollback → 3 commits
         app.check_commits_with_height(2);
-        assert_eq!(committed_count.load(std::sync::atomic::Ordering::Relaxed), 3);
+        assert_eq!(
+            committed_count.load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
         assert_eq!(app.state().len(), 2);
         assert_eq!(app.state()[0], "d");
     }

@@ -2,9 +2,7 @@ use std::io::{self, Write};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use eye_declare::{
-    InlineRenderer, Markdown, Spinner, TextBlock, VStack,
-};
+use eye_declare::{InlineRenderer, Markdown, Spinner, TextBlock, VStack};
 use ratatui_core::style::{Color, Modifier, Style};
 
 fn main() -> io::Result<()> {
@@ -68,7 +66,9 @@ async fn main() {
 The `.await` points are where the runtime can **suspend** this task and run others. This is *cooperative* multitasking — tasks must explicitly yield via `await`."#;
 
     // Stream token by token
-    let tokens: Vec<&str> = response_text.split_inclusive(|c: char| c.is_whitespace() || c == '\n').collect();
+    let tokens: Vec<&str> = response_text
+        .split_inclusive(|c: char| c.is_whitespace() || c == '\n')
+        .collect();
     let mut accumulated = String::new();
     for token in &tokens {
         accumulated.push_str(token);

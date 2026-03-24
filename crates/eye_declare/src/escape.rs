@@ -100,7 +100,12 @@ impl Diff {
 
 /// Move the cursor from its current position to (target_row, target_col)
 /// using relative movement escape sequences only.
-pub fn write_relative_move(out: &mut Vec<u8>, cursor: &mut CursorState, target_row: u16, target_col: u16) {
+pub fn write_relative_move(
+    out: &mut Vec<u8>,
+    cursor: &mut CursorState,
+    target_row: u16,
+    target_col: u16,
+) {
     // Vertical movement
     if target_row < cursor.row {
         let n = cursor.row - target_row;
@@ -299,9 +304,7 @@ fn push_param(params: &mut Vec<u8>, first: &mut bool, val: u16) {
 
 /// Append SGR color parameters for a Color.
 fn write_color_params(params: &mut Vec<u8>, color: Color, is_fg: bool, first: &mut bool) {
-    let code = |fg: u16, bg: u16| -> u16 {
-        if is_fg { fg } else { bg }
-    };
+    let code = |fg: u16, bg: u16| -> u16 { if is_fg { fg } else { bg } };
 
     match color {
         Color::Reset => push_param(params, first, code(39, 49)),

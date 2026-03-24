@@ -84,10 +84,7 @@ impl Elements {
     /// Used by tests that need custom build/update behavior not
     /// expressible through the Component trait alone.
     #[allow(dead_code)]
-    pub(crate) fn add_element<E: Element + 'static>(
-        &mut self,
-        element: E,
-    ) -> ElementHandle<'_> {
+    pub(crate) fn add_element<E: Element + 'static>(&mut self, element: E) -> ElementHandle<'_> {
         let type_id = TypeId::of::<E>();
         self.items.push(ElementEntry {
             element: Box::new(element),

@@ -40,5 +40,5 @@ fn element_impl(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::Tok
     Ok(codegen::generate_elements(&nodes))
 }
 
-mod parse;
 mod codegen;
+mod parse;

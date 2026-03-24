@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream};
-use syn::{braced, parenthesized, token, Expr, Ident, LitStr, Pat, Result, Token};
+use syn::{Expr, Ident, LitStr, Pat, Result, Token, braced, parenthesized, token};
 
 /// A node in the element tree.
 pub enum Node {

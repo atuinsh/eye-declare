@@ -8,7 +8,6 @@ use crate::element::Elements;
 use crate::inline::InlineRenderer;
 use crate::node::NodeId;
 
-
 /// Convenience wrapper that runs an eye_declare UI with a crossterm event loop.
 ///
 /// Handles terminal raw mode, event polling, rendering, resize, and cleanup.

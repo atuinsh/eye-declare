@@ -422,7 +422,10 @@ impl Renderer {
         // Autofocus: set focus when this node mounts (if focusable)
         if self.nodes[id.0].autofocus {
             let node = &self.nodes[id.0];
-            if node.component.is_focusable_erased(node.state.inner_as_any()) {
+            if node
+                .component
+                .is_focusable_erased(node.state.inner_as_any())
+            {
                 self.focused = Some(id);
             }
         }

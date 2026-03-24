@@ -1,4 +1,4 @@
-use eye_declare::{element, Elements, Markdown, Renderer, Spinner, TextBlock, VStack};
+use eye_declare::{Elements, Markdown, Renderer, Spinner, TextBlock, VStack, element};
 use ratatui_core::style::Style;
 
 /// Helper: build elements into a renderer and return child count.

@@ -32,29 +32,25 @@ fn main() -> io::Result<()> {
     r.freeze(header);
 
     // Long paragraphs that will wrap
-    let _para1 = r.push(
-        TextBlock::new().line(
-            "This is a long paragraph that demonstrates display-time word wrapping. \
+    let _para1 = r.push(TextBlock::new().line(
+        "This is a long paragraph that demonstrates display-time word wrapping. \
              The text is stored as a single logical line, and the framework wraps it \
              at render time based on the current terminal width. Try resizing your \
              terminal window — the text will reflow automatically. This is the same \
              approach used by Codex's tui2 architecture.",
-            Style::default().fg(Color::White),
-        ),
-    );
+        Style::default().fg(Color::White),
+    ));
 
     let spacer1 = r.push(TextBlock::new().unstyled(""));
     r.freeze(spacer1);
 
-    let _para2 = r.push(
-        TextBlock::new().line(
-            "Here's a second paragraph with different styling to show that \
+    let _para2 = r.push(TextBlock::new().line(
+        "Here's a second paragraph with different styling to show that \
              multiple components each wrap independently. Each component computes \
              its own height based on wrapped line count, and the framework stacks \
              them vertically. The total content height adjusts as wrapping changes.",
-            Style::default().fg(Color::Yellow),
-        ),
-    );
+        Style::default().fg(Color::Yellow),
+    ));
 
     let spacer2 = r.push(TextBlock::new().unstyled(""));
     r.freeze(spacer2);
