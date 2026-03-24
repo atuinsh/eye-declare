@@ -59,11 +59,8 @@ impl Diff {
         out.extend_from_slice(BSU);
         out.extend_from_slice(HIDE_CURSOR);
 
-        // Sort cells by (y, x) for sequential writing
-        let mut cells = self.cells.clone();
-        cells.sort_by_key(|(x, y, _)| (*y, *x));
-
-        for (x, y, cell) in &cells {
+        // Cells are already in (y, x) order from Buffer::diff's row-major iteration.
+        for (x, y, cell) in &self.cells {
             let target_row = *y;
             let target_col = *x;
 
