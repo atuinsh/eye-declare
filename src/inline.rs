@@ -275,6 +275,84 @@ impl InlineRenderer {
         output
     }
 
+    /// How many rows have been emitted to the terminal.
+    pub fn emitted_rows(&self) -> u16 {
+        self.emitted_rows
+    }
+
+    /// Get the last rendered height of a node.
+    pub fn node_last_height(&self, id: NodeId) -> u16 {
+        self.renderer.node_last_height(id)
+    }
+
+    /// Detect which children of `container` have fully scrolled into
+    /// terminal scrollback and can be committed.
+    ///
+    /// Returns `(index, key)` pairs for each committed child, in order
+    /// from the top of the container.
+    pub fn detect_committed(
+        &self,
+        container: NodeId,
+        terminal_height: u16,
+    ) -> Vec<(usize, Option<String>)> {
+        let scrollback_rows = self.emitted_rows.saturating_sub(terminal_height);
+        if scrollback_rows == 0 {
+            return Vec::new();
+        }
+
+        let children = self.renderer.children(container);
+        let mut accumulated: u16 = 0;
+        let mut committed = Vec::new();
+
+        for (i, &child_id) in children.iter().enumerate() {
+            let child_height = self.renderer.node_last_height(child_id);
+            accumulated = accumulated.saturating_add(child_height);
+            if accumulated <= scrollback_rows {
+                let key = self.renderer.node_key(child_id).map(|s| s.to_string());
+                committed.push((i, key));
+            } else {
+                break;
+            }
+        }
+
+        committed
+    }
+
+    /// Commit (drop) the first `count` children of `container` that
+    /// have scrolled into terminal scrollback.
+    ///
+    /// Adjusts `prev_frame`, `emitted_rows`, and cursor tracking so
+    /// subsequent diffs only cover the active region.
+    pub fn commit(&mut self, container: NodeId, count: usize, committed_height: u16) {
+        if count == 0 || committed_height == 0 {
+            return;
+        }
+
+        // Clear focus if it's on a committed node
+        if let Some(focused) = self.renderer.focus() {
+            let children = self.renderer.children(container);
+            let committed_ids: Vec<NodeId> = children[..count].to_vec();
+            if committed_ids.contains(&focused) {
+                self.renderer.clear_focus();
+            }
+        }
+
+        // Remove committed children from the tree (fires unmount, cleans effects)
+        let children: Vec<NodeId> = self.renderer.children(container)[..count].to_vec();
+        for child_id in children {
+            self.renderer.remove(child_id);
+        }
+
+        // Adjust prev_frame: slice off committed rows
+        if let Some(ref prev) = self.prev_frame {
+            self.prev_frame = Some(prev.slice_top_rows(committed_height));
+        }
+
+        // Adjust emitted_rows and cursor
+        self.emitted_rows = self.emitted_rows.saturating_sub(committed_height);
+        self.cursor.row = self.cursor.row.saturating_sub(committed_height);
+    }
+
     /// Append escape sequences to position the terminal cursor at the
     /// focused component's cursor hint (if any), using relative movement.
     fn append_cursor_position(&mut self, output: &mut Vec<u8>) {

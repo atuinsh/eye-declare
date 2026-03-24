@@ -95,6 +95,28 @@ pub struct Diff {
     pub(crate) prev_area: Rect,
 }
 
+impl Frame {
+    /// Create a new frame with the top `n` rows removed.
+    ///
+    /// Used for committed scrollback: committed rows are sliced off
+    /// so subsequent diffs only cover the active region.
+    pub fn slice_top_rows(&self, n: u16) -> Frame {
+        let old_area = self.buffer.area;
+        let new_height = old_area.height.saturating_sub(n);
+        if new_height == 0 {
+            return Frame::new(Buffer::empty(Rect::new(0, 0, old_area.width, 0)));
+        }
+        let new_area = Rect::new(0, 0, old_area.width, new_height);
+        let mut new_buf = Buffer::empty(new_area);
+        for y in 0..new_height {
+            for x in 0..old_area.width {
+                new_buf[(x, y)] = self.buffer[(x, y + n)].clone();
+            }
+        }
+        Frame::new(new_buf)
+    }
+}
+
 impl Diff {
     /// Whether there are no changes.
     pub fn is_empty(&self) -> bool {

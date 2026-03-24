@@ -12,6 +12,16 @@ use crate::element::Elements;
 use crate::inline::InlineRenderer;
 use crate::node::NodeId;
 
+/// Information about a committed element passed to the `on_commit` callback.
+#[derive(Debug, Clone)]
+pub struct CommittedElement {
+    /// The element's explicit key, if one was set.
+    pub key: Option<String>,
+    /// The element's positional index among its siblings at the time
+    /// of commit (always 0 — elements are committed from the front).
+    pub index: usize,
+}
+
 /// Controls whether the application event loop continues.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlFlow {
@@ -68,6 +78,7 @@ pub struct ApplicationBuilder<S: Send + 'static> {
     state: Option<S>,
     view_fn: Option<Box<dyn Fn(&S) -> Elements>>,
     width: Option<u16>,
+    on_commit: Option<Box<dyn FnMut(&CommittedElement, &mut S)>>,
 }
 
 impl<S: Send + 'static> ApplicationBuilder<S> {
@@ -87,6 +98,26 @@ impl<S: Send + 'static> ApplicationBuilder<S> {
     /// width if not specified.
     pub fn width(mut self, width: u16) -> Self {
         self.width = Some(width);
+        self
+    }
+
+    /// Set a callback for when elements scroll into terminal scrollback.
+    ///
+    /// The callback receives a [`CommittedElement`] identifying which
+    /// element was committed, and a mutable reference to the app state.
+    /// Use this to evict committed data from state so the view function
+    /// produces fewer elements on the next rebuild.
+    ///
+    /// ```ignore
+    /// .on_commit(|committed, state| {
+    ///     state.messages.remove(0); // evict from front
+    /// })
+    /// ```
+    pub fn on_commit(
+        mut self,
+        f: impl FnMut(&CommittedElement, &mut S) + 'static,
+    ) -> Self {
+        self.on_commit = Some(Box::new(f));
         self
     }
 
@@ -118,6 +149,7 @@ impl<S: Send + 'static> ApplicationBuilder<S> {
             inline,
             container,
             dirty: true,
+            on_commit: self.on_commit,
             rx,
             exit,
         };
@@ -154,6 +186,7 @@ pub struct Application<S: Send + 'static> {
     inline: InlineRenderer,
     container: NodeId,
     dirty: bool,
+    on_commit: Option<Box<dyn FnMut(&CommittedElement, &mut S)>>,
     rx: mpsc::UnboundedReceiver<Box<dyn FnOnce(&mut S) + Send>>,
     exit: Arc<AtomicBool>,
 }
@@ -165,6 +198,7 @@ impl<S: Send + 'static> Application<S> {
             state: None,
             view_fn: None,
             width: None,
+            on_commit: None,
         }
     }
 
@@ -257,12 +291,15 @@ impl<S: Send + 'static> Application<S> {
     }
 
     /// Drain pending handle updates, rebuild if dirty, render to writer.
+    /// Also checks for committed scrollback if `on_commit` is set.
     pub fn flush(&mut self, writer: &mut impl Write) -> io::Result<()> {
         self.drain_updates();
         if self.dirty {
             self.rebuild();
         }
-        self.flush_to(writer)
+        self.flush_to(writer)?;
+        self.check_commits();
+        Ok(())
     }
 
     /// Access the inner [`InlineRenderer`] for advanced use.
@@ -314,6 +351,7 @@ impl<S: Send + 'static> Application<S> {
                 self.rebuild();
             }
             self.flush_to(writer)?;
+            self.check_commits();
         }
 
         // Final flush
@@ -393,6 +431,7 @@ impl<S: Send + 'static> Application<S> {
                 self.rebuild();
             }
             self.flush_to(stdout)?;
+            self.check_commits();
         }
 
         Ok(())
@@ -418,6 +457,45 @@ impl<S: Send + 'static> Application<S> {
             writer.flush()?;
         }
         Ok(())
+    }
+
+    fn check_commits(&mut self) {
+        let terminal_height = crossterm::terminal::size()
+            .map(|(_, h)| h)
+            .unwrap_or(u16::MAX);
+        self.check_commits_with_height(terminal_height);
+    }
+
+    fn check_commits_with_height(&mut self, terminal_height: u16) {
+        if self.on_commit.is_none() {
+            return;
+        }
+
+        let committed = self.inline.detect_committed(self.container, terminal_height);
+        if committed.is_empty() {
+            return;
+        }
+
+        // Calculate total committed height
+        let children = self.inline.children(self.container);
+        let mut committed_height: u16 = 0;
+        for &(i, _) in &committed {
+            committed_height += self.inline.node_last_height(children[i]);
+        }
+
+        // Fire callbacks
+        let on_commit = self.on_commit.as_mut().unwrap();
+        for (index, key) in &committed {
+            let elem = CommittedElement {
+                key: key.clone(),
+                index: *index,
+            };
+            on_commit(&elem, &mut self.state);
+        }
+        self.dirty = true;
+
+        // Drop committed nodes and adjust frame tracking
+        self.inline.commit(self.container, committed.len(), committed_height);
     }
 }
 
@@ -725,5 +803,141 @@ mod tests {
         let mut buf = Vec::new();
         app.flush(&mut buf).unwrap();
         assert_eq!(*app.state(), 99);
+    }
+
+    // --- Committed scrollback tests ---
+
+    #[test]
+    fn commit_fires_when_content_exceeds_terminal() {
+        use std::sync::{Arc, Mutex};
+
+        let committed_keys: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let keys_clone = committed_keys.clone();
+
+        let (mut app, _handle) = Application::builder()
+            .state(vec!["line1".to_string(), "line2".to_string(), "line3".to_string()])
+            .view(|lines: &Vec<String>| {
+                let mut els = Elements::new();
+                for (i, line) in lines.iter().enumerate() {
+                    els.add(TextBlock::new().unstyled(line.as_str()))
+                        .key(format!("line-{}", i));
+                }
+                els
+            })
+            .width(20)
+            .on_commit(move |elem, state| {
+                keys_clone.lock().unwrap().push(elem.key.clone());
+                state.remove(0);
+            })
+            .build()
+            .unwrap();
+
+        // Render: 3 lines, each 1 row tall
+        let mut buf = Vec::new();
+        app.flush(&mut buf).unwrap();
+
+        // emitted_rows is now 3. Simulate terminal height of 2:
+        // scrollback = 3 - 2 = 1, so the first child (1 row) is committed
+        app.check_commits_with_height(2);
+
+        let keys = committed_keys.lock().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0], Some("line-0".to_string()));
+        drop(keys);
+
+        // State should have been mutated (first element removed)
+        assert_eq!(app.state().len(), 2);
+        assert_eq!(app.state()[0], "line2");
+    }
+
+    #[test]
+    fn no_commit_when_all_content_visible() {
+        let committed_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count_clone = committed_count.clone();
+
+        let (mut app, _handle) = Application::builder()
+            .state(vec!["line1".to_string()])
+            .view(|lines: &Vec<String>| {
+                let mut els = Elements::new();
+                for line in lines {
+                    els.add(TextBlock::new().unstyled(line.as_str()));
+                }
+                els
+            })
+            .width(20)
+            .on_commit(move |_, _| {
+                count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            })
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        app.flush(&mut buf).unwrap();
+
+        // Terminal height 10, emitted 1 row — nothing in scrollback
+        app.check_commits_with_height(10);
+        assert_eq!(committed_count.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn no_commit_without_callback() {
+        let (mut app, _handle) = Application::builder()
+            .state(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+            .view(|lines: &Vec<String>| {
+                let mut els = Elements::new();
+                for line in lines {
+                    els.add(TextBlock::new().unstyled(line.as_str()));
+                }
+                els
+            })
+            .width(20)
+            // No on_commit callback
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        app.flush(&mut buf).unwrap();
+
+        // Should not panic or commit anything
+        app.check_commits_with_height(1);
+        assert_eq!(app.state().len(), 3); // unchanged
+    }
+
+    #[test]
+    fn multiple_commits_at_once() {
+        let committed_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count_clone = committed_count.clone();
+
+        let (mut app, _handle) = Application::builder()
+            .state(vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+                "e".to_string(),
+            ])
+            .view(|lines: &Vec<String>| {
+                let mut els = Elements::new();
+                for line in lines {
+                    els.add(TextBlock::new().unstyled(line.as_str()));
+                }
+                els
+            })
+            .width(20)
+            .on_commit(move |_, state: &mut Vec<String>| {
+                count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                state.remove(0);
+            })
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        app.flush(&mut buf).unwrap();
+
+        // 5 rows emitted, terminal height 2 → 3 rows in scrollback → 3 commits
+        app.check_commits_with_height(2);
+        assert_eq!(committed_count.load(std::sync::atomic::Ordering::Relaxed), 3);
+        assert_eq!(app.state().len(), 2);
+        assert_eq!(app.state()[0], "d");
     }
 }

@@ -111,6 +111,16 @@ impl Renderer {
         &self.nodes[id.0].children
     }
 
+    /// Get the key assigned to a node (if any).
+    pub fn node_key(&self, id: NodeId) -> Option<&str> {
+        self.nodes[id.0].key.as_deref()
+    }
+
+    /// Get the last rendered height of a node.
+    pub fn node_last_height(&self, id: NodeId) -> u16 {
+        self.nodes[id.0].last_height.unwrap_or(0)
+    }
+
     /// Set which component has focus for event routing.
     pub fn set_focus(&mut self, id: NodeId) {
         self.focused = Some(id);
