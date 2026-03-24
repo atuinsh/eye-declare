@@ -261,3 +261,66 @@ impl Node {
         !self.children.is_empty()
     }
 }
+
+/// Arena that stores nodes with slot reuse.
+///
+/// Tombstoned nodes are freed and their slots recycled for new allocations,
+/// preventing unbounded growth in long-running applications.
+pub(crate) struct NodeArena {
+    slots: Vec<Option<Node>>,
+    free: Vec<usize>,
+}
+
+impl NodeArena {
+    pub fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            free: Vec::new(),
+        }
+    }
+
+    /// Allocate a slot for a node, reusing a freed slot if available.
+    pub fn alloc(&mut self, node: Node) -> NodeId {
+        if let Some(idx) = self.free.pop() {
+            self.slots[idx] = Some(node);
+            NodeId(idx)
+        } else {
+            let idx = self.slots.len();
+            self.slots.push(Some(node));
+            NodeId(idx)
+        }
+    }
+
+    /// Free a slot, making it available for reuse.
+    ///
+    /// # Panics
+    /// Panics if the slot is already empty (double free).
+    pub fn free(&mut self, id: NodeId) {
+        assert!(
+            self.slots[id.0].is_some(),
+            "double free of NodeId({})",
+            id.0
+        );
+        self.slots[id.0] = None;
+        self.free.push(id.0);
+    }
+
+    /// Iterate over all live nodes mutably.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Node> {
+        self.slots.iter_mut().filter_map(|slot| slot.as_mut())
+    }
+}
+
+impl std::ops::Index<NodeId> for NodeArena {
+    type Output = Node;
+
+    fn index(&self, id: NodeId) -> &Node {
+        self.slots[id.0].as_ref().expect("accessed a freed NodeId")
+    }
+}
+
+impl std::ops::IndexMut<NodeId> for NodeArena {
+    fn index_mut(&mut self, id: NodeId) -> &mut Node {
+        self.slots[id.0].as_mut().expect("accessed a freed NodeId")
+    }
+}

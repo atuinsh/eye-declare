@@ -6,7 +6,9 @@ use ratatui_core::{buffer::Buffer, layout::Rect};
 use crate::component::{Component, EventResult, Tracked, VStack};
 use crate::element::{ElementEntry, Elements};
 use crate::frame::Frame;
-use crate::node::{Effect, EffectKind, Layout, Node, NodeId, TypedEffectHandler, WidthConstraint};
+use crate::node::{
+    Effect, EffectKind, Layout, Node, NodeArena, NodeId, TypedEffectHandler, WidthConstraint,
+};
 
 /// Manages a tree of components and renders them into a Frame.
 ///
@@ -14,7 +16,7 @@ use crate::node::{Effect, EffectKind, Layout, Node, NodeId, TypedEffectHandler, 
 /// Components are added as children of the root or of other nodes.
 /// Children are laid out vertically within their parent's area.
 pub struct Renderer {
-    nodes: Vec<Node>,
+    nodes: NodeArena,
     root: NodeId,
     width: u16,
     focused: Option<NodeId>,
@@ -29,11 +31,10 @@ impl Renderer {
     /// Create a new renderer with the given terminal width.
     /// An implicit VStack root node is created automatically.
     pub fn new(width: u16) -> Self {
-        let mut nodes = Vec::new();
-        let root = NodeId(0);
-        nodes.push(Node::new(VStack));
+        let mut nodes = NodeArena::new();
+        let root = nodes.alloc(Node::new(VStack));
         // Root starts clean since VStack has no visible content
-        nodes[0].state.clear_dirty();
+        nodes[root].state.clear_dirty();
         Self {
             nodes,
             root,
@@ -51,13 +52,12 @@ impl Renderer {
 
     /// Add a component as a child of the given parent. Returns its NodeId.
     pub fn append_child<C: Component>(&mut self, parent: NodeId, component: C) -> NodeId {
-        let id = NodeId(self.nodes.len());
         let layout = component.layout();
         let mut node = Node::new(component);
         node.parent = Some(parent);
         node.layout = layout;
-        self.nodes.push(node);
-        self.nodes[parent.0].children.push(id);
+        let id = self.nodes.alloc(node);
+        self.nodes[parent].children.push(id);
         id
     }
 
@@ -67,13 +67,13 @@ impl Renderer {
     /// Used by reconciliation and for imperative prop updates.
     pub fn swap_component<C: Component>(&mut self, id: NodeId, component: C) {
         let layout = component.layout();
-        self.nodes[id.0].component = Box::new(component);
-        self.nodes[id.0].layout = layout;
+        self.nodes[id].component = Box::new(component);
+        self.nodes[id].layout = layout;
     }
 
     /// Read the component on a node, downcast to the concrete type.
     pub fn component<C: Component>(&self, id: NodeId) -> &C {
-        self.nodes[id.0]
+        self.nodes[id]
             .component
             .as_any_component()
             .downcast_ref::<C>()
@@ -92,7 +92,7 @@ impl Renderer {
     /// # Panics
     /// Panics if the NodeId is invalid or the state type doesn't match.
     pub fn state_mut<C: Component>(&mut self, id: NodeId) -> &mut Tracked<C::State> {
-        let node = &mut self.nodes[id.0];
+        let node = &mut self.nodes[id];
         node.state
             .as_any_mut()
             .downcast_mut::<Tracked<C::State>>()
@@ -102,27 +102,27 @@ impl Renderer {
     /// Freeze a component. Frozen components use their cached buffer
     /// and are not re-rendered on subsequent frames.
     pub fn freeze(&mut self, id: NodeId) {
-        self.nodes[id.0].frozen = true;
+        self.nodes[id].frozen = true;
     }
 
     /// Set the layout direction for a container node.
     pub fn set_layout(&mut self, id: NodeId, layout: Layout) {
-        self.nodes[id.0].layout = layout;
+        self.nodes[id].layout = layout;
     }
 
     /// List the children of a node.
     pub fn children(&self, id: NodeId) -> &[NodeId] {
-        &self.nodes[id.0].children
+        &self.nodes[id].children
     }
 
     /// Get the key assigned to a node (if any).
     pub fn node_key(&self, id: NodeId) -> Option<&str> {
-        self.nodes[id.0].key.as_deref()
+        self.nodes[id].key.as_deref()
     }
 
     /// Get the last rendered height of a node.
     pub fn node_last_height(&self, id: NodeId) -> u16 {
-        self.nodes[id.0].last_height.unwrap_or(0)
+        self.nodes[id].last_height.unwrap_or(0)
     }
 
     /// Set which component has focus for event routing.
@@ -175,7 +175,7 @@ impl Renderer {
         // Try the focused node, then bubble up through parents
         let mut current = Some(focused);
         while let Some(id) = current {
-            let node = &mut self.nodes[id.0];
+            let node = &mut self.nodes[id];
             if node.frozen {
                 current = node.parent;
                 continue;
@@ -185,7 +185,7 @@ impl Renderer {
             if result == EventResult::Consumed {
                 return EventResult::Consumed;
             }
-            current = self.nodes[id.0].parent;
+            current = self.nodes[id].parent;
         }
 
         EventResult::Ignored
@@ -199,7 +199,7 @@ impl Renderer {
     }
 
     fn collect_focusable(&self, id: NodeId, result: &mut Vec<NodeId>) {
-        let node = &self.nodes[id.0];
+        let node = &self.nodes[id];
         if node.frozen {
             return;
         }
@@ -249,8 +249,8 @@ impl Renderer {
         assert!(id != self.root, "cannot remove root node");
 
         // Remove from parent's children list
-        if let Some(parent) = self.nodes[id.0].parent {
-            self.nodes[parent.0].children.retain(|&child| child != id);
+        if let Some(parent) = self.nodes[id].parent {
+            self.nodes[parent].children.retain(|&child| child != id);
         }
 
         self.tombstone_subtree(id);
@@ -279,10 +279,10 @@ impl Renderer {
     ///
     /// Returns `None` if no child has the given key.
     pub fn find_by_key(&self, parent: NodeId, key: &str) -> Option<NodeId> {
-        self.nodes[parent.0]
+        self.nodes[parent]
             .children
             .iter()
-            .find(|&&child_id| self.nodes[child_id.0].key.as_deref() == Some(key))
+            .find(|&&child_id| self.nodes[child_id].key.as_deref() == Some(key))
             .copied()
     }
 
@@ -377,9 +377,10 @@ impl Renderer {
                     last_tick,
                     interval,
                 } = &effect.kind
-                    && now.duration_since(*last_tick) >= *interval {
-                        due.push((id, idx));
-                    }
+                    && now.duration_since(*last_tick) >= *interval
+                {
+                    due.push((id, idx));
+                }
             }
         }
 
@@ -397,9 +398,7 @@ impl Renderer {
             {
                 *last_tick = now;
             }
-            effects[idx]
-                .handler
-                .call(self.nodes[id.0].state.as_any_mut());
+            effects[idx].handler.call(self.nodes[id].state.as_any_mut());
             self.effects.insert(id, effects);
         }
 
@@ -418,8 +417,8 @@ impl Renderer {
     /// Fire and remove all OnMount effects for a node.
     fn fire_mount(&mut self, id: NodeId) {
         // Autofocus: set focus when this node mounts (if focusable)
-        if self.nodes[id.0].autofocus {
-            let node = &self.nodes[id.0];
+        if self.nodes[id].autofocus {
+            let node = &self.nodes[id];
             if node
                 .component
                 .is_focusable_erased(node.state.inner_as_any())
@@ -436,7 +435,7 @@ impl Renderer {
 
             // Fire mount handlers
             for effect in mounts {
-                effect.handler.call(self.nodes[id.0].state.as_any_mut());
+                effect.handler.call(self.nodes[id].state.as_any_mut());
             }
 
             // Reinsert remaining effects (if any)
@@ -454,7 +453,7 @@ impl Renderer {
                 .partition(|e| matches!(e.kind, EffectKind::OnUnmount));
 
             for effect in unmounts {
-                effect.handler.call(self.nodes[id.0].state.as_any_mut());
+                effect.handler.call(self.nodes[id].state.as_any_mut());
             }
 
             if !remaining.is_empty() {
@@ -469,14 +468,14 @@ impl Renderer {
     /// position+type), preserving their local component state. Calls
     /// `Element::update` on reused nodes and `Element::build` on new ones.
     fn reconcile_children(&mut self, parent: NodeId, new_entries: Vec<ElementEntry>) {
-        let old_children: Vec<NodeId> = std::mem::take(&mut self.nodes[parent.0].children);
+        let old_children: Vec<NodeId> = std::mem::take(&mut self.nodes[parent].children);
 
         // Separate old children into keyed and unkeyed
         let mut old_by_key: HashMap<String, NodeId> = HashMap::new();
         let mut old_unkeyed: VecDeque<NodeId> = VecDeque::new();
 
         for &child_id in &old_children {
-            if let Some(ref key) = self.nodes[child_id.0].key {
+            if let Some(ref key) = self.nodes[child_id].key {
                 old_by_key.insert(key.clone(), child_id);
             } else {
                 old_unkeyed.push_back(child_id);
@@ -489,7 +488,7 @@ impl Renderer {
             let matched = if let Some(ref key) = entry.key {
                 // Keyed: match by key + type
                 match old_by_key.remove(key) {
-                    Some(old_id) if self.nodes[old_id.0].element_type_id == Some(entry.type_id) => {
+                    Some(old_id) if self.nodes[old_id].element_type_id == Some(entry.type_id) => {
                         Some(old_id)
                     }
                     Some(old_id) => {
@@ -505,7 +504,7 @@ impl Renderer {
                 // type exists later in the list. Use keys for stable identity
                 // across reorders.
                 if let Some(front_id) = old_unkeyed.pop_front() {
-                    if self.nodes[front_id.0].element_type_id == Some(entry.type_id) {
+                    if self.nodes[front_id].element_type_id == Some(entry.type_id) {
                         Some(front_id)
                     } else {
                         self.tombstone_subtree(front_id);
@@ -519,10 +518,10 @@ impl Renderer {
             let node_id = if let Some(old_id) = matched {
                 // REUSE: update props, preserve local state
                 entry.element.update(self, old_id);
-                self.nodes[old_id.0].parent = Some(parent);
-                self.nodes[old_id.0].width_constraint = entry.width_constraint;
+                self.nodes[old_id].parent = Some(parent);
+                self.nodes[old_id].width_constraint = entry.width_constraint;
                 // Guarantee re-render after props update
-                self.nodes[old_id.0].force_dirty = true;
+                self.nodes[old_id].force_dirty = true;
                 self.apply_lifecycle(old_id);
 
                 // Resolve children: component decides (slot = external children)
@@ -535,9 +534,9 @@ impl Renderer {
             } else {
                 // BUILD: create new node
                 let id = entry.element.build(self, parent);
-                self.nodes[id.0].element_type_id = Some(entry.type_id);
-                self.nodes[id.0].key = entry.key;
-                self.nodes[id.0].width_constraint = entry.width_constraint;
+                self.nodes[id].element_type_id = Some(entry.type_id);
+                self.nodes[id].key = entry.key;
+                self.nodes[id].width_constraint = entry.width_constraint;
                 self.apply_lifecycle(id);
                 self.fire_mount(id);
 
@@ -561,7 +560,7 @@ impl Renderer {
             self.tombstone_subtree(old_id);
         }
 
-        self.nodes[parent.0].children = new_children;
+        self.nodes[parent].children = new_children;
     }
 
     /// Build elements into the tree as children of `parent`.
@@ -571,9 +570,9 @@ impl Renderer {
     fn build_elements(&mut self, parent: NodeId, elements: Elements) {
         for entry in elements.into_items() {
             let node_id = entry.element.build(self, parent);
-            self.nodes[node_id.0].element_type_id = Some(entry.type_id);
-            self.nodes[node_id.0].key = entry.key;
-            self.nodes[node_id.0].width_constraint = entry.width_constraint;
+            self.nodes[node_id].element_type_id = Some(entry.type_id);
+            self.nodes[node_id].key = entry.key;
+            self.nodes[node_id].width_constraint = entry.width_constraint;
             self.apply_lifecycle(node_id);
             self.fire_mount(node_id);
 
@@ -587,7 +586,7 @@ impl Renderer {
     /// Resolve children for a node: pass external slot through the
     /// component's `children()` method. Returns the final child elements.
     fn resolve_children(&self, id: NodeId, slot: Option<Elements>) -> Option<Elements> {
-        let node = &self.nodes[id.0];
+        let node = &self.nodes[id];
         let state = node.state.inner_as_any();
         node.component.children_erased(state, slot)
     }
@@ -599,7 +598,7 @@ impl Renderer {
     /// (backward compatibility with imperative registration).
     fn apply_lifecycle(&mut self, id: NodeId) {
         let output = {
-            let node = &self.nodes[id.0];
+            let node = &self.nodes[id];
             node.component.lifecycle_erased(node.state.inner_as_any())
         };
         if output.effects.is_empty() {
@@ -607,24 +606,23 @@ impl Renderer {
         } else {
             self.effects.insert(id, output.effects);
         }
-        self.nodes[id.0].autofocus = output.autofocus;
+        self.nodes[id].autofocus = output.autofocus;
     }
 
     /// Tombstone a node and all its descendants without touching the
     /// parent's children list (caller is responsible for that).
     fn tombstone_subtree(&mut self, id: NodeId) {
         // Children unmount first (bottom-up), then parent
-        let children = std::mem::take(&mut self.nodes[id.0].children);
+        let children = std::mem::take(&mut self.nodes[id].children);
         for child_id in children {
             self.tombstone_subtree(child_id);
         }
         self.fire_unmount(id);
         self.effects.remove(&id);
-        let node = &mut self.nodes[id.0];
-        node.parent = None;
-        node.frozen = true;
-        node.last_height = Some(0);
-        node.cached_buffer = None;
+        if self.focused == Some(id) {
+            self.focused = None;
+        }
+        self.nodes.free(id);
     }
 
     /// Set the rendering width (e.g., on terminal resize).
@@ -633,14 +631,12 @@ impl Renderer {
     pub fn set_width(&mut self, width: u16) {
         if self.width != width {
             self.width = width;
-            for node in &mut self.nodes {
+            for node in self.nodes.iter_mut() {
                 node.cached_buffer = None;
                 node.last_height = None;
                 // Force dirty so non-frozen nodes re-render even if
                 // state wasn't mutated via DerefMut
                 if !node.frozen {
-                    // We can't call DerefMut on the type-erased state,
-                    // so we need a force_dirty method
                     node.force_dirty = true;
                 }
             }
@@ -671,7 +667,7 @@ impl Renderer {
         // Compute cursor hint from the focused component
         self.cursor_hint = None;
         if let Some(focused) = self.focused {
-            let node = &self.nodes[focused.0];
+            let node = &self.nodes[focused];
             if let Some(layout_rect) = node.layout_rect {
                 let state = node.state.inner_as_any();
                 if let Some((rel_col, rel_row)) =
@@ -697,7 +693,7 @@ impl Renderer {
     /// Caches the result in `node.last_height` so that `render_node`
     /// can read it without re-measuring.
     fn measure_height(&mut self, id: NodeId, width: u16) -> u16 {
-        let node = &self.nodes[id.0];
+        let node = &self.nodes[id];
 
         if node.frozen {
             return node.last_height.unwrap_or(0);
@@ -720,7 +716,7 @@ impl Renderer {
                 Layout::Horizontal => {
                     let constraints: Vec<WidthConstraint> = children
                         .iter()
-                        .map(|&cid| self.nodes[cid.0].width_constraint)
+                        .map(|&cid| self.nodes[cid].width_constraint)
                         .collect();
                     let widths = allocate_widths(&constraints, inner_width);
                     children
@@ -739,7 +735,7 @@ impl Renderer {
             node.component.desired_height_erased(width, state)
         };
 
-        self.nodes[id.0].last_height = Some(height);
+        self.nodes[id].last_height = Some(height);
         height
     }
 
@@ -750,9 +746,9 @@ impl Renderer {
         }
 
         // Store layout rect for cursor positioning
-        self.nodes[id.0].layout_rect = Some(area);
+        self.nodes[id].layout_rect = Some(area);
 
-        let node = &self.nodes[id.0];
+        let node = &self.nodes[id];
         let is_container = node.is_container();
 
         // Frozen or clean leaf: use cached buffer
@@ -766,15 +762,13 @@ impl Renderer {
 
         if is_container {
             // Render the container's own component first (background/border/chrome)
-            let state = self.nodes[id.0].state.inner_as_any();
-            self.nodes[id.0]
-                .component
-                .render_erased(area, buffer, state);
+            let state = self.nodes[id].state.inner_as_any();
+            self.nodes[id].component.render_erased(area, buffer, state);
 
             // Compute inner area for children using content insets
-            let insets = self.nodes[id.0]
+            let insets = self.nodes[id]
                 .component
-                .content_inset_erased(self.nodes[id.0].state.inner_as_any());
+                .content_inset_erased(self.nodes[id].state.inner_as_any());
             let inner = Rect::new(
                 area.x.saturating_add(insets.left),
                 area.y.saturating_add(insets.top),
@@ -782,16 +776,15 @@ impl Renderer {
                 area.height.saturating_sub(insets.vertical()),
             );
 
-            let children: Vec<NodeId> = self.nodes[id.0].children.clone();
-            let layout = self.nodes[id.0].layout;
+            let children: Vec<NodeId> = self.nodes[id].children.clone();
+            let layout = self.nodes[id].layout;
 
             match layout {
                 Layout::Vertical => {
                     let mut y_offset = inner.y;
                     for child_id in &children {
                         // Use cached height from measure pass
-                        let child_height =
-                            self.nodes[child_id.0].last_height.unwrap_or(0);
+                        let child_height = self.nodes[*child_id].last_height.unwrap_or(0);
                         if child_height == 0 {
                             continue;
                         }
@@ -803,7 +796,7 @@ impl Renderer {
                 Layout::Horizontal => {
                     let constraints: Vec<WidthConstraint> = children
                         .iter()
-                        .map(|&cid| self.nodes[cid.0].width_constraint)
+                        .map(|&cid| self.nodes[cid].width_constraint)
                         .collect();
                     let widths = allocate_widths(&constraints, inner.width);
                     let mut x_offset = inner.x;
@@ -821,24 +814,22 @@ impl Renderer {
             // Cache and clean
             let mut node_buf = Buffer::empty(area);
             copy_buffer_region(buffer, &mut node_buf, area);
-            self.nodes[id.0].cached_buffer = Some(node_buf);
-            self.nodes[id.0].last_height = Some(area.height);
-            self.nodes[id.0].state.clear_dirty();
-            self.nodes[id.0].force_dirty = false;
+            self.nodes[id].cached_buffer = Some(node_buf);
+            self.nodes[id].last_height = Some(area.height);
+            self.nodes[id].state.clear_dirty();
+            self.nodes[id].force_dirty = false;
         } else {
             // Leaf: render the component
-            let state = self.nodes[id.0].state.inner_as_any();
-            self.nodes[id.0]
-                .component
-                .render_erased(area, buffer, state);
+            let state = self.nodes[id].state.inner_as_any();
+            self.nodes[id].component.render_erased(area, buffer, state);
 
             // Cache and clean
             let mut node_buf = Buffer::empty(area);
             copy_buffer_region(buffer, &mut node_buf, area);
-            self.nodes[id.0].cached_buffer = Some(node_buf);
-            self.nodes[id.0].last_height = Some(area.height);
-            self.nodes[id.0].state.clear_dirty();
-            self.nodes[id.0].force_dirty = false;
+            self.nodes[id].cached_buffer = Some(node_buf);
+            self.nodes[id].last_height = Some(area.height);
+            self.nodes[id].state.clear_dirty();
+            self.nodes[id].force_dirty = false;
         }
     }
 }
@@ -1001,9 +992,9 @@ mod tests {
         let id = r.push(TextBlock);
         r.state_mut::<TextBlock>(id).push("hello".to_string());
 
-        assert!(r.nodes[id.0].state.is_dirty());
+        assert!(r.nodes[id].state.is_dirty());
         let _ = r.render();
-        assert!(!r.nodes[id.0].state.is_dirty());
+        assert!(!r.nodes[id].state.is_dirty());
     }
 
     #[test]
@@ -1277,13 +1268,13 @@ mod tests {
 
         // Render to clear dirty flag
         let _ = r.render();
-        assert!(!r.nodes[id.0].state.is_dirty());
+        assert!(!r.nodes[id].state.is_dirty());
 
         // Deliver event
         r.handle_event(&key_event('a'));
 
         // State should be dirty now (DerefMut in handle_event_erased)
-        assert!(r.nodes[id.0].state.is_dirty());
+        assert!(r.nodes[id].state.is_dirty());
     }
 
     #[test]
@@ -1699,7 +1690,9 @@ mod tests {
         els.add_element(CounterEl::new("counter"));
         r.rebuild(container, els);
 
+        // Verify it's a CounterWidget
         let old_id = r.children(container)[0];
+        assert_eq!(r.state_mut::<CounterWidget>(old_id).1, 1); // build_count = 1
 
         // Rebuild with TestTextEl (different type)
         let mut els = Elements::new();
@@ -1707,8 +1700,11 @@ mod tests {
         r.rebuild(container, els);
 
         let new_id = r.children(container)[0];
-        // Different NodeId — old node tombstoned, new created
-        assert_ne!(new_id, old_id);
+        // Old node was freed and new one created (slot may be reused).
+        // Verify the component is now a TextBlock, not a CounterWidget.
+        let state = r.state_mut::<TextBlock>(new_id);
+        assert_eq!(state.len(), 1);
+        assert_eq!(state[0], "text");
     }
 
     #[test]
@@ -2163,6 +2159,9 @@ mod tests {
 
     #[test]
     fn unmount_fires_on_tombstone() {
+        use std::sync::{Arc, Mutex};
+
+        let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let mut r = Renderer::new(10);
         let container = r.push(VStack);
 
@@ -2172,13 +2171,18 @@ mod tests {
 
         let id = r.find_by_key(container, "a").unwrap();
 
-        // Rebuild with empty — triggers tombstone
+        // Register an unmount handler that captures to external state
+        let log_clone = log.clone();
+        r.on_unmount::<LifecycleWidget>(id, move |_state| {
+            log_clone.lock().unwrap().push("unmounted".to_string());
+        });
+
+        // Rebuild with empty — triggers tombstone and frees the node
         r.rebuild(container, Elements::new());
 
-        // The node is tombstoned, but we can still read its state
-        // (tombstoned nodes stay in the arena)
-        let state = r.state_mut::<LifecycleWidget>(id);
-        assert!(state.log.contains(&"unmounted:bye".to_string()));
+        // Verify unmount fired via external log
+        let entries = log.lock().unwrap();
+        assert!(entries.contains(&"unmounted".to_string()));
     }
 
     #[test]
@@ -2937,6 +2941,8 @@ mod tests {
 
     #[test]
     fn lifecycle_with_mount_and_unmount() {
+        use std::sync::{Arc, Mutex};
+
         let mut r = Renderer::new(10);
         let container = r.push(VStack);
 
@@ -2980,9 +2986,16 @@ mod tests {
         assert!(state.contains(&"built".to_string()));
         assert!(state.contains(&"mounted".to_string()));
 
-        // Tombstone — unmount fires
+        // Register an external unmount observer before tombstoning
+        let unmount_log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let log_clone = unmount_log.clone();
+        r.on_unmount::<MountTracker>(id, move |_state| {
+            log_clone.lock().unwrap().push("unmounted".to_string());
+        });
+
+        // Tombstone — unmount fires, node is freed
         r.rebuild(container, Elements::new());
-        let state = r.state_mut::<MountTracker>(id);
-        assert!(state.contains(&"unmounted".to_string()));
+        let entries = unmount_log.lock().unwrap();
+        assert!(entries.contains(&"unmounted".to_string()));
     }
 }

@@ -315,9 +315,10 @@ async fn stream_response(handle: Handle<AppState>, msg_id: u64) {
         let w = word.to_string();
         handle.update(move |state| {
             if let Some(msg) = state.messages.iter_mut().find(|m| m.id == msg_id)
-                && let MessageKind::Assistant { content, .. } = &mut msg.kind {
-                    content.push_str(&w);
-                }
+                && let MessageKind::Assistant { content, .. } = &mut msg.kind
+            {
+                content.push_str(&w);
+            }
         });
         // Vary speed for natural feel
         let delay = if word.contains('\n') {
@@ -331,9 +332,10 @@ async fn stream_response(handle: Handle<AppState>, msg_id: u64) {
     // Mark as done
     handle.update(move |state| {
         if let Some(msg) = state.messages.iter_mut().find(|m| m.id == msg_id)
-            && let MessageKind::Assistant { done, .. } = &mut msg.kind {
-                *done = true;
-            }
+            && let MessageKind::Assistant { done, .. } = &mut msg.kind
+        {
+            *done = true;
+        }
     });
 }
 

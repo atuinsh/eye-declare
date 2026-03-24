@@ -271,15 +271,17 @@ fn write_incremental_style(out: &mut Vec<u8>, from: &Style, to: &Style) {
 
     // Foreground change
     if from.fg != to.fg
-        && let Some(fg) = to.fg {
-            write_color_params(&mut params, fg, true, &mut first);
-        }
+        && let Some(fg) = to.fg
+    {
+        write_color_params(&mut params, fg, true, &mut first);
+    }
 
     // Background change
     if from.bg != to.bg
-        && let Some(bg) = to.bg {
-            write_color_params(&mut params, bg, false, &mut first);
-        }
+        && let Some(bg) = to.bg
+    {
+        write_color_params(&mut params, bg, false, &mut first);
+    }
 
     if !params.is_empty() {
         out.extend_from_slice(b"\x1b[");

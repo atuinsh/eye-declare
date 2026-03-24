@@ -138,12 +138,12 @@ impl<S: Send + 'static> ApplicationBuilder<S> {
     /// Queries terminal size if width was not specified, which may
     /// fail if no terminal is attached.
     pub fn build(self) -> io::Result<(Application<S>, Handle<S>)> {
-        let state = self
-            .state
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Application requires .state()"))?;
-        let view_fn = self
-            .view_fn
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Application requires .view()"))?;
+        let state = self.state.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "Application requires .state()")
+        })?;
+        let view_fn = self.view_fn.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "Application requires .view()")
+        })?;
         let width = match self.width {
             Some(w) => w,
             None => crossterm::terminal::size()?.0,
