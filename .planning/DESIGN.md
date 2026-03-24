@@ -449,4 +449,4 @@ useful and testable:
 9. ✅ Application wrapper (async run, Handle, run_interactive)
 10. ✅ Committed scrollback (on_commit callback, state eviction)
 11. **Memoization** — skip children() for unchanged composites (deferred — implement when composite components make it worthwhile)
-12. **element! macro** — JSX-like syntax sugar
+12. ✅ element! macro (proc macro, JSX-like syntax)
