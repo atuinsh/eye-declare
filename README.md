@@ -1,6 +1,6 @@
 # eye-declare
 
-A declarative inline TUI rendering library for Rust, built on [ratatui](https://ratatui.rs).
+A declarative inline TUI rendering library for Rust, built on [Ratatui](https://ratatui.rs).
 
 eye-declare provides a React-like component model for building terminal UIs that render inline (growing into terminal scrollback) rather than taking over the full screen. Designed for CLI tools, AI assistants, and interactive prompts.
 
@@ -322,7 +322,7 @@ The tradeoff is deliberate. Inline rendering is the right model for AI assistant
 
 2. **Layout** measures each node's desired height (with word wrapping computed at render time) and allocates widths for horizontal containers. Content insets allow components to declare border/padding chrome while children render inside.
 
-3. **Rendering** produces a ratatui `Buffer` for each frame. The `InlineRenderer` diffs against the previous frame and emits only changed cells as ANSI escape sequences, wrapped in DEC synchronized output (`?2026h/l`) to prevent tearing.
+3. **Rendering** produces a Ratatui `Buffer` for each frame. The `InlineRenderer` diffs against the previous frame and emits only changed cells as ANSI escape sequences, wrapped in DEC synchronized output (`?2026h/l`) to prevent tearing.
 
 4. **Growth** is handled by emitting newlines to claim new terminal rows before writing content. Old rows naturally scroll into terminal scrollback.
 
