@@ -10,7 +10,6 @@ pub mod inline;
 pub mod insets;
 pub mod node;
 pub mod renderer;
-pub mod terminal;
 pub mod wrap;
 
 // Re-export key types at the crate root for convenience
@@ -27,7 +26,6 @@ pub use inline::InlineRenderer;
 pub use insets::Insets;
 pub use node::{Layout, NodeId, WidthConstraint};
 pub use renderer::Renderer;
-pub use terminal::Terminal;
 
 // Re-export the element! proc macro
 #[cfg(feature = "macros")]

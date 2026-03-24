@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Guard that restores terminal state on drop (including panic unwind).
-pub(crate) struct RawModeGuard;
+struct RawModeGuard;
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {

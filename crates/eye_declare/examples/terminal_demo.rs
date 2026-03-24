@@ -1,5 +1,8 @@
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
-use eye_declare::{Component, EventResult, Terminal, TextBlock, VStack};
+use std::io::Write;
+use std::time::Duration;
+
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use eye_declare::{Component, EventResult, InlineRenderer, TextBlock, VStack};
 use ratatui_core::{
     buffer::Buffer,
     layout::Rect,
@@ -191,17 +194,18 @@ impl Component for Input {
 }
 
 // ---------------------------------------------------------------------------
-// Demo using Terminal wrapper
+// Demo using InlineRenderer directly (imperative sync API)
 // ---------------------------------------------------------------------------
 
 fn main() -> std::io::Result<()> {
-    let mut term = Terminal::new()?;
+    let (width, _) = crossterm::terminal::size()?;
+    let mut renderer = InlineRenderer::new(width);
 
     // Header
-    let header = term.push(
+    let header = renderer.push(
         TextBlock::new()
             .line(
-                "eye_declare Terminal Demo",
+                "eye_declare InlineRenderer Demo",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -212,36 +216,96 @@ fn main() -> std::io::Result<()> {
             )
             .unstyled(""),
     );
-    term.flush()?;
-    term.freeze(header);
+    flush(&mut renderer)?;
+    renderer.freeze(header);
 
     // Message area
-    let messages = term.push(VStack);
+    let messages = renderer.push(VStack);
 
     // Spacer
-    let _spacer = term.push(TextBlock::new().unstyled(""));
+    let _spacer = renderer.push(TextBlock::new().unstyled(""));
 
     // Two input fields — Tab cycles between them
-    let name_id = term.push(Input);
-    {
-        let s = term.state_mut::<Input>(name_id);
-        s.label = "Name".into();
+    let name_id = renderer.push(Input);
+    renderer.state_mut::<Input>(name_id).label = "Name".into();
+
+    let msg_id = renderer.push(Input);
+    renderer.state_mut::<Input>(msg_id).label = "Message".into();
+
+    renderer.set_focus(name_id);
+
+    // Initial render before entering raw mode
+    flush(&mut renderer)?;
+
+    crossterm::terminal::enable_raw_mode()?;
+    let result = event_loop(&mut renderer, name_id, msg_id, messages);
+    let _ = crossterm::terminal::disable_raw_mode();
+    let _ = std::io::stdout().write_all(b"\x1b[?25h");
+    let _ = std::io::stdout().flush();
+    println!();
+
+    result
+}
+
+fn flush(renderer: &mut InlineRenderer) -> std::io::Result<()> {
+    let output = renderer.render();
+    if !output.is_empty() {
+        let mut stdout = std::io::stdout();
+        stdout.write_all(&output)?;
+        stdout.flush()?;
     }
+    Ok(())
+}
 
-    let msg_id = term.push(Input);
-    {
-        let s = term.state_mut::<Input>(msg_id);
-        s.label = "Message".into();
-    }
+fn event_loop(
+    renderer: &mut InlineRenderer,
+    name_id: eye_declare::NodeId,
+    msg_id: eye_declare::NodeId,
+    messages: eye_declare::NodeId,
+) -> std::io::Result<()> {
+    let mut stdout = std::io::stdout();
 
-    term.set_focus(name_id);
+    loop {
+        if !event::poll(Duration::from_millis(50))? {
+            if renderer.tick() {
+                let output = renderer.render();
+                if !output.is_empty() {
+                    stdout.write_all(&output)?;
+                    stdout.flush()?;
+                }
+            }
+            continue;
+        }
 
-    term.run(|event, renderer| {
+        let evt = event::read()?;
+
+        // Ctrl+C exits
+        if let Event::Key(KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        }) = &evt
+        {
+            if modifiers.contains(KeyModifiers::CONTROL) {
+                break;
+            }
+        }
+
+        // Resize
+        if let Event::Resize(new_width, _) = &evt {
+            let output = renderer.resize(*new_width);
+            stdout.write_all(&output)?;
+            stdout.flush()?;
+            continue;
+        }
+
+        // Enter submits a message
         if let Event::Key(KeyEvent {
             code: KeyCode::Enter,
             kind: KeyEventKind::Press,
             ..
-        }) = event
+        }) = &evt
         {
             let name = renderer.state_mut::<Input>(name_id).text.clone();
             let text = renderer.state_mut::<Input>(msg_id).take_text();
@@ -251,21 +315,27 @@ fn main() -> std::io::Result<()> {
                 } else {
                     name
                 };
-                let msg = renderer.append_child(
+                renderer.append_child(
                     messages,
                     TextBlock::new().line(
                         format!("{}: {}", display_name, text),
                         Style::default().fg(Color::White),
                     ),
                 );
-                let _ = msg;
             }
-            // Move focus back to message input after submit
             renderer.set_focus(msg_id);
-            return false;
         }
-        false
-    })?;
+
+        // Framework event handling (Tab cycling, focus routing)
+        renderer.handle_event(&evt);
+        renderer.tick();
+
+        let output = renderer.render();
+        if !output.is_empty() {
+            stdout.write_all(&output)?;
+            stdout.flush()?;
+        }
+    }
 
     Ok(())
 }
