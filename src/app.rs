@@ -424,13 +424,14 @@ impl<S: Send + 'static> Application<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::{SpinnerEl, TextBlockEl};
+    use crate::components::text::TextBlock;
+    use crate::components::spinner::Spinner;
     use ratatui_core::style::Style;
 
     fn text_view(state: &Vec<String>) -> Elements {
         let mut els = Elements::new();
         for line in state {
-            els.add(TextBlockEl::new().line(line.as_str(), Style::default()));
+            els.add(TextBlock::new().line(line.as_str(), Style::default()));
         }
         els
     }
@@ -501,7 +502,7 @@ mod tests {
             .state(0u32)
             .view(|n: &u32| {
                 let mut els = Elements::new();
-                els.add(TextBlockEl::new().line(
+                els.add(TextBlock::new().line(
                     &format!("count: {}", n),
                     Style::default(),
                 ));
@@ -557,7 +558,7 @@ mod tests {
             .view(|show: &bool| {
                 let mut els = Elements::new();
                 if *show {
-                    els.add(SpinnerEl::new("loading")).key("s");
+                    els.add(Spinner::new("loading")).key("s");
                 }
                 els
             })
@@ -583,7 +584,7 @@ mod tests {
             .view(|show: &bool| {
                 let mut els = Elements::new();
                 if *show {
-                    els.add(SpinnerEl::new("loading"));
+                    els.add(Spinner::new("loading"));
                 }
                 els
             })
@@ -612,7 +613,7 @@ mod tests {
             .state(0u32)
             .view(|n: &u32| {
                 let mut els = Elements::new();
-                els.add(TextBlockEl::new().line(
+                els.add(TextBlock::new().line(
                     &format!("count: {}", n),
                     Style::default(),
                 ));
@@ -677,7 +678,7 @@ mod tests {
             .view(|show: &bool| {
                 let mut els = Elements::new();
                 if *show {
-                    els.add(SpinnerEl::new("loading")).key("s");
+                    els.add(Spinner::new("loading")).key("s");
                 }
                 els
             })
@@ -703,7 +704,7 @@ mod tests {
             .state(0u32)
             .view(|n: &u32| {
                 let mut els = Elements::new();
-                els.add(TextBlockEl::new().line(
+                els.add(TextBlock::new().line(
                     &format!("count: {}", n),
                     Style::default(),
                 ));

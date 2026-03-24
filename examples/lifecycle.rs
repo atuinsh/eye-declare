@@ -11,7 +11,7 @@ use std::thread;
 use std::time::Duration;
 
 use eye_declare::{
-    Component, Element, Elements, Hooks, InlineRenderer, Renderer, SpinnerEl, TextBlockEl, VStack,
+    Component, Elements, Hooks, InlineRenderer, Spinner, TextBlock, VStack,
 };
 use ratatui_core::{
     buffer::Buffer,
@@ -22,16 +22,22 @@ use ratatui_core::{
 };
 use ratatui_widgets::paragraph::Paragraph;
 
-use eye_declare::NodeId;
-
 // ---------------------------------------------------------------------------
-// A status log component that records lifecycle events
+// A status log component that records lifecycle events.
+// `name` is a prop on the component; `entries` is internal state.
 // ---------------------------------------------------------------------------
 
-struct StatusLog;
+struct StatusLog {
+    name: String,
+}
+
+impl StatusLog {
+    fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into() }
+    }
+}
 
 struct StatusLogState {
-    name: String,
     entries: Vec<(String, Style)>,
 }
 
@@ -58,16 +64,21 @@ impl Component for StatusLog {
     }
 
     fn initial_state(&self) -> StatusLogState {
-        StatusLogState {
-            name: String::new(),
+        let mut state = StatusLogState {
             entries: Vec::new(),
+        };
+        if !self.name.is_empty() {
+            state.log(
+                format!("  {} created", self.name),
+                Style::default().fg(Color::DarkGray),
+            );
         }
+        state
     }
 
-    fn lifecycle(&self, hooks: &mut Hooks<StatusLogState>, state: &StatusLogState) {
-        let name = state.name.clone();
-        if !name.is_empty() {
-            let mount_name = name.clone();
+    fn lifecycle(&self, hooks: &mut Hooks<StatusLogState>, _state: &StatusLogState) {
+        if !self.name.is_empty() {
+            let mount_name = self.name.clone();
             hooks.use_mount(move |state| {
                 state.log(
                     format!("  {} mounted", mount_name),
@@ -77,52 +88,16 @@ impl Component for StatusLog {
                 );
             });
 
+            let unmount_name = self.name.clone();
             hooks.use_unmount(move |state| {
                 state.log(
-                    format!("  {} unmounted", name),
+                    format!("  {} unmounted", unmount_name),
                     Style::default()
                         .fg(Color::Red)
                         .add_modifier(Modifier::ITALIC),
                 );
             });
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// A task element — sets state, lifecycle handles effects
-// ---------------------------------------------------------------------------
-
-struct TaskEl {
-    name: String,
-}
-
-impl TaskEl {
-    fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into() }
-    }
-}
-
-impl Element for TaskEl {
-    fn build(self: Box<Self>, renderer: &mut Renderer, parent: NodeId) -> NodeId {
-        let id = renderer.append_child(parent, StatusLog);
-        let state = renderer.state_mut::<StatusLog>(id);
-        state.name = self.name.clone();
-        state.log(
-            format!("  {} created", self.name),
-            Style::default().fg(Color::DarkGray),
-        );
-        // Effects handled by StatusLog::lifecycle()
-        id
-    }
-
-    fn update(self: Box<Self>, renderer: &mut Renderer, node_id: NodeId) {
-        let state = renderer.state_mut::<StatusLog>(node_id);
-        state.name = self.name.clone();
-        state.log(
-            format!("  {} updated", self.name),
-            Style::default().fg(Color::Yellow),
-        );
     }
 }
 
@@ -138,7 +113,7 @@ struct AppState {
 fn task_view(state: &AppState) -> Elements {
     let mut els = Elements::new();
 
-    els.add(TextBlockEl::new().line(
+    els.add(TextBlock::new().line(
         format!("Tasks ({})", state.tasks.len()),
         Style::default()
             .fg(Color::White)
@@ -146,14 +121,14 @@ fn task_view(state: &AppState) -> Elements {
     ));
 
     for task in &state.tasks {
-        els.add(TaskEl::new(task)).key(task.clone());
+        els.add(StatusLog::new(task)).key(task.clone());
     }
 
     if state.processing {
-        els.add(SpinnerEl::new("Processing...")).key("spinner");
+        els.add(Spinner::new("Processing...")).key("spinner");
     }
 
-    els.add(TextBlockEl::new().line("---", Style::default().fg(Color::DarkGray)));
+    els.add(TextBlock::new().line("---", Style::default().fg(Color::DarkGray)));
 
     els
 }

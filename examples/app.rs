@@ -8,7 +8,7 @@
 use std::io;
 use std::time::Duration;
 
-use eye_declare::{Application, Elements, SpinnerEl, TextBlockEl};
+use eye_declare::{Application, Elements, Spinner, TextBlock};
 use ratatui_core::style::{Color, Modifier, Style};
 
 // ---------------------------------------------------------------------------
@@ -24,11 +24,11 @@ fn app_view(state: &AppState) -> Elements {
     let mut els = Elements::new();
 
     for (text, style) in &state.messages {
-        els.add(TextBlockEl::new().line(text.as_str(), *style));
+        els.add(TextBlock::new().line(text.as_str(), *style));
     }
 
     if state.thinking {
-        els.add(SpinnerEl::new("Processing...")).key("spinner");
+        els.add(Spinner::new("Processing...")).key("spinner");
     }
 
     els

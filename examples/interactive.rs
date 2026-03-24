@@ -247,21 +247,20 @@ fn main() -> io::Result<()> {
     let mut stdout = io::stdout();
 
     // Header
-    let header = r.push(TextBlock);
-    {
-        let s = r.state_mut::<TextBlock>(header);
-        s.push(
-            "Interactive Input Demo",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
-        s.push(
-            "Type a message and press Enter to submit. Ctrl+C to exit.",
-            Style::default().fg(Color::DarkGray),
-        );
-        s.push("", Style::default());
-    }
+    let header = r.push(
+        TextBlock::new()
+            .line(
+                "Interactive Input Demo",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .line(
+                "Type a message and press Enter to submit. Ctrl+C to exit.",
+                Style::default().fg(Color::DarkGray),
+            )
+            .unstyled(""),
+    );
     flush(&mut r, &mut stdout)?;
     r.freeze(header);
 
@@ -269,10 +268,7 @@ fn main() -> io::Result<()> {
     let log_id = r.push(MessageLog);
 
     // Spacer
-    let spacer = r.push(TextBlock);
-    {
-        r.state_mut::<TextBlock>(spacer).push("", Style::default());
-    }
+    let _spacer = r.push(TextBlock::new().unstyled(""));
 
     // Input field
     let input_id = r.push(Input);

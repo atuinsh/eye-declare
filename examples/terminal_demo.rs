@@ -83,9 +83,6 @@ impl Component for Input {
     type State = InputState;
 
     fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
-        // Render label + text as plain styled spans.
-        // The hardware cursor (positioned by cursor_position) provides
-        // the insertion point indicator — no visual cursor character needed.
         let spans = vec![
             Span::styled(
                 format!("{}: ", state.label),
@@ -170,21 +167,20 @@ fn main() -> std::io::Result<()> {
     let mut term = Terminal::new()?;
 
     // Header
-    let header = term.push(TextBlock);
-    {
-        let s = term.state_mut::<TextBlock>(header);
-        s.push(
-            "eye_declare Terminal Demo",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
-        s.push(
-            "Tab switches between inputs. Enter submits. Ctrl+C exits.",
-            Style::default().fg(Color::DarkGray),
-        );
-        s.push("", Style::default());
-    }
+    let header = term.push(
+        TextBlock::new()
+            .line(
+                "eye_declare Terminal Demo",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .line(
+                "Tab switches between inputs. Enter submits. Ctrl+C exits.",
+                Style::default().fg(Color::DarkGray),
+            )
+            .unstyled(""),
+    );
     term.flush()?;
     term.freeze(header);
 
@@ -192,8 +188,7 @@ fn main() -> std::io::Result<()> {
     let messages = term.push(VStack);
 
     // Spacer
-    let spacer = term.push(TextBlock);
-    term.state_mut::<TextBlock>(spacer).push("", Style::default());
+    let _spacer = term.push(TextBlock::new().unstyled(""));
 
     // Two input fields — Tab cycles between them
     let name_id = term.push(Input);
@@ -225,11 +220,14 @@ fn main() -> std::io::Result<()> {
                 } else {
                     name
                 };
-                let msg = renderer.append_child(messages, TextBlock);
-                renderer.state_mut::<TextBlock>(msg).push(
-                    format!("{}: {}", display_name, text),
-                    Style::default().fg(Color::White),
+                let msg = renderer.append_child(
+                    messages,
+                    TextBlock::new().line(
+                        format!("{}: {}", display_name, text),
+                        Style::default().fg(Color::White),
+                    ),
                 );
+                let _ = msg;
             }
             // Move focus back to message input after submit
             renderer.set_focus(msg_id);

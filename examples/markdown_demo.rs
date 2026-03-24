@@ -3,7 +3,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eye_declare::{
-    InlineRenderer, Markdown, MarkdownState, Spinner, SpinnerState, TextBlock, VStack,
+    InlineRenderer, Markdown, Spinner, TextBlock, VStack,
 };
 use ratatui_core::style::{Color, Modifier, Style};
 
@@ -13,47 +13,31 @@ fn main() -> io::Result<()> {
     let mut stdout = io::stdout();
 
     // User prompt
-    let prompt = r.push(TextBlock);
-    {
-        let s = r.state_mut::<TextBlock>(prompt);
-        s.push(
+    let _prompt = r.push(
+        TextBlock::new().line(
             "› Explain how async/await works in Rust with an example",
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
-        );
-    }
+        ),
+    );
     flush(&mut r, &mut stdout)?;
-    r.freeze(prompt);
 
     // Spacer
-    let sp = r.push(TextBlock);
-    r.state_mut::<TextBlock>(sp).push("", Style::default());
-    r.freeze(sp);
+    let _sp = r.push(TextBlock::new().unstyled(""));
 
     // Response container
     let response = r.push(VStack);
 
     // Thinking spinner
-    let think = r.append_child(response, Spinner);
-    {
-        let s = r.state_mut::<Spinner>(think);
-        **s = SpinnerState::new("Thinking...");
-    }
+    let think = r.append_child(response, Spinner::new("Thinking..."));
     animate_spinner(&mut r, &mut stdout, think, Duration::from_millis(1200))?;
-    {
-        let s = r.state_mut::<Spinner>(think);
-        s.complete(Some("Thought for 1.2s".into()));
-    }
+    r.swap_component(think, Spinner::new("Thinking...").done("Thought for 1.2s"));
     flush(&mut r, &mut stdout)?;
     r.freeze(think);
 
-    // Stream the markdown response
-    let md = r.append_child(response, Markdown);
-    {
-        let s = r.state_mut::<Markdown>(md);
-        **s = MarkdownState::new("");
-    }
+    // Stream the markdown response by rebuilding with progressively more content
+    let md_id = r.append_child(response, Markdown::new(""));
 
     let response_text = r#"## Async/Await in Rust
 
@@ -85,11 +69,10 @@ The `.await` points are where the runtime can **suspend** this task and run othe
 
     // Stream token by token
     let tokens: Vec<&str> = response_text.split_inclusive(|c: char| c.is_whitespace() || c == '\n').collect();
+    let mut accumulated = String::new();
     for token in &tokens {
-        {
-            let s = r.state_mut::<Markdown>(md);
-            s.append(token);
-        }
+        accumulated.push_str(token);
+        r.swap_component(md_id, Markdown::new(accumulated.clone()));
         flush(&mut r, &mut stdout)?;
         thread::sleep(Duration::from_millis(20));
     }

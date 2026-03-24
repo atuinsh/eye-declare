@@ -5,6 +5,7 @@ use ratatui_core::{buffer::Buffer, layout::Rect};
 use crate::element::Elements;
 use crate::hooks::Hooks;
 use crate::insets::Insets;
+use crate::node::Layout;
 
 /// Result of handling an input event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +121,14 @@ pub trait Component: Send + Sync + 'static {
         Insets::ZERO
     }
 
+    /// Layout direction for this component's children.
+    ///
+    /// Override to `Layout::Horizontal` for horizontal containers.
+    /// Default: `Layout::Vertical`.
+    fn layout(&self) -> Layout {
+        Layout::default()
+    }
+
     /// Declare lifecycle effects for this component.
     ///
     /// Called by the framework after build and update. Use the `hooks`
@@ -187,6 +196,10 @@ impl Component for HStack {
     }
 
     fn initial_state(&self) -> () {}
+
+    fn layout(&self) -> Layout {
+        Layout::Horizontal
+    }
 }
 
 #[cfg(test)]

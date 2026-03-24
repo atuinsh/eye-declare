@@ -12,19 +12,29 @@ use crate::wrap;
 /// A component that renders a subset of Markdown suitable for
 /// LLM/AI chat output.
 ///
-/// Supports:
-/// - **bold** and *italic* inline formatting
-/// - `inline code` with backticks
-/// - Fenced code blocks (```)
-/// - Headings (# through ###)
-/// - Unordered lists (- and * prefixed)
-/// - Regular paragraphs with word wrapping
-pub struct Markdown;
+/// The markdown source is a prop on the component. Style
+/// configuration lives in [`MarkdownState`].
+///
+/// ```ignore
+/// Markdown::new("# Hello\n\nThis is **bold**.")
+/// ```
+pub struct Markdown {
+    source: String,
+}
+
+impl Markdown {
+    pub fn new(source: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+        }
+    }
+}
 
 /// State for a [`Markdown`] component.
+///
+/// Contains style configuration only. The markdown source text
+/// is a prop on the [`Markdown`] struct.
 pub struct MarkdownState {
-    /// Raw markdown source text.
-    pub source: String,
     /// Base style for normal text.
     pub base_style: Style,
     /// Style for inline code.
@@ -42,10 +52,9 @@ pub struct MarkdownState {
 }
 
 impl MarkdownState {
-    pub fn new(source: impl Into<String>) -> Self {
+    pub fn new() -> Self {
         let base = Style::default();
         Self {
-            source: source.into(),
             base_style: base,
             code_style: Style::default().fg(Color::Yellow),
             block_code_style: Style::default().fg(Color::Green),
@@ -57,15 +66,11 @@ impl MarkdownState {
             marker_style: Style::default().fg(Color::DarkGray),
         }
     }
+}
 
-    /// Set the source markdown text.
-    pub fn set_source(&mut self, source: impl Into<String>) {
-        self.source = source.into();
-    }
-
-    /// Append text to the source (useful for streaming).
-    pub fn append(&mut self, text: &str) {
-        self.source.push_str(text);
+impl Default for MarkdownState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -73,23 +78,23 @@ impl Component for Markdown {
     type State = MarkdownState;
 
     fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
-        if state.source.is_empty() || area.width == 0 || area.height == 0 {
+        if self.source.is_empty() || area.width == 0 || area.height == 0 {
             return;
         }
-        let text = render_markdown(&state.source, state);
+        let text = render_markdown(&self.source, state);
         wrap::wrapping_paragraph(text).render(area, buf);
     }
 
     fn desired_height(&self, width: u16, state: &Self::State) -> u16 {
-        if state.source.is_empty() || width == 0 {
+        if self.source.is_empty() || width == 0 {
             return 0;
         }
-        let text = render_markdown(&state.source, state);
+        let text = render_markdown(&self.source, state);
         wrap::wrapped_line_count(&text, width)
     }
 
     fn initial_state(&self) -> MarkdownState {
-        MarkdownState::new("")
+        MarkdownState::new()
     }
 }
 
@@ -290,22 +295,23 @@ mod tests {
 
     #[test]
     fn empty_markdown() {
-        let md = Markdown;
-        let state = MarkdownState::new("");
+        let md = Markdown::new("");
+        let state = md.initial_state();
         assert_eq!(md.desired_height(80, &state), 0);
     }
 
     #[test]
     fn plain_text() {
-        let md = Markdown;
-        let state = MarkdownState::new("Hello world");
+        let md = Markdown::new("Hello world");
+        let state = md.initial_state();
         assert_eq!(md.desired_height(80, &state), 1);
     }
 
     #[test]
     fn heading_renders() {
-        let state = MarkdownState::new("# Title");
-        let text = render_markdown(&state.source, &state);
+        let md = Markdown::new("# Title");
+        let state = md.initial_state();
+        let text = render_markdown(&md.source, &state);
         assert_eq!(text.lines.len(), 1);
         assert!(text.lines[0]
             .spans
@@ -315,8 +321,9 @@ mod tests {
 
     #[test]
     fn code_block_indented() {
-        let state = MarkdownState::new("```rust\nfn main() {}\n```");
-        let text = render_markdown(&state.source, &state);
+        let md = Markdown::new("```rust\nfn main() {}\n```");
+        let state = md.initial_state();
+        let text = render_markdown(&md.source, &state);
         // Should have language hint + code line
         assert!(text.lines.len() >= 2);
         // Code should be indented
@@ -325,8 +332,9 @@ mod tests {
 
     #[test]
     fn inline_bold() {
-        let state = MarkdownState::new("This is **bold** text");
-        let text = render_markdown(&state.source, &state);
+        let md = Markdown::new("This is **bold** text");
+        let state = md.initial_state();
+        let text = render_markdown(&md.source, &state);
         let spans = &text.lines[0].spans;
         // Should have at least 3 spans: "This is ", "bold", " text"
         assert!(spans.len() >= 3);
@@ -337,8 +345,9 @@ mod tests {
 
     #[test]
     fn inline_italic() {
-        let state = MarkdownState::new("This is *italic* text");
-        let text = render_markdown(&state.source, &state);
+        let md = Markdown::new("This is *italic* text");
+        let state = md.initial_state();
+        let text = render_markdown(&md.source, &state);
         let spans = &text.lines[0].spans;
         let italic_span = spans.iter().find(|s| s.content.contains("italic")).unwrap();
         assert!(italic_span.style.add_modifier.contains(Modifier::ITALIC));
@@ -346,8 +355,9 @@ mod tests {
 
     #[test]
     fn inline_code() {
-        let state = MarkdownState::new("Use `println!` here");
-        let text = render_markdown(&state.source, &state);
+        let md = Markdown::new("Use `println!` here");
+        let state = md.initial_state();
+        let text = render_markdown(&md.source, &state);
         let spans = &text.lines[0].spans;
         let code_span = spans
             .iter()
@@ -358,15 +368,17 @@ mod tests {
 
     #[test]
     fn list_items() {
-        let state = MarkdownState::new("- item one\n- item two");
-        let text = render_markdown(&state.source, &state);
+        let md = Markdown::new("- item one\n- item two");
+        let state = md.initial_state();
+        let text = render_markdown(&md.source, &state);
         assert_eq!(text.lines.len(), 2);
     }
 
     #[test]
     fn unclosed_markers_render_as_text() {
-        let state = MarkdownState::new("This has an unclosed **bold");
-        let text = render_markdown(&state.source, &state);
+        let md = Markdown::new("This has an unclosed **bold");
+        let state = md.initial_state();
+        let text = render_markdown(&md.source, &state);
         // Should render without panic, showing ** as literal text
         let full_text: String = text.lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(full_text.contains("**bold"));
@@ -374,30 +386,24 @@ mod tests {
 
     #[test]
     fn mixed_formatting() {
-        let state = MarkdownState::new(
+        let md = Markdown::new(
             "# Welcome\n\nThis is **bold** and *italic* with `code`.\n\n```\nlet x = 1;\n```\n\n- item",
         );
-        let text = render_markdown(&state.source, &state);
+        let state = md.initial_state();
+        let text = render_markdown(&md.source, &state);
         // Should have: heading, blank, paragraph, blank, code, blank, list item
         assert!(text.lines.len() >= 5);
     }
 
     #[test]
     fn wraps_at_width() {
-        let md = Markdown;
-        let state = MarkdownState::new(
+        let md = Markdown::new(
             "This is a long paragraph that should wrap when rendered at a narrow width.",
         );
+        let state = md.initial_state();
         let height_wide = md.desired_height(80, &state);
         let height_narrow = md.desired_height(20, &state);
         assert_eq!(height_wide, 1);
         assert!(height_narrow >= 4);
-    }
-
-    #[test]
-    fn streaming_append() {
-        let mut state = MarkdownState::new("Hello");
-        state.append(" world");
-        assert_eq!(state.source, "Hello world");
     }
 }

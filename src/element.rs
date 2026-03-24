@@ -1,38 +1,33 @@
 use std::any::TypeId;
 
+use crate::component::Component;
 use crate::node::{NodeId, WidthConstraint};
 use crate::renderer::Renderer;
 
-/// Describes a component to create in the tree.
+/// Type-erased component description for the element tree.
 ///
-/// Each built-in component has a corresponding element builder (e.g.,
-/// `TextBlockEl`, `SpinnerEl`). Users can implement this trait for
-/// custom components.
-///
-/// The `build` method creates the component, adds it as a child of
-/// `parent`, initializes its state, and returns the new NodeId.
-///
-/// The `update` method is called during reconciliation when a matching
-/// node is found. It should update "props" (parent-provided config)
-/// while preserving "local state" (component-internal state like
-/// animation frames). Implement `update` for any element whose
-/// configuration can change across rebuilds.
-pub trait Element: Send {
-    /// Create the component, add it as a child of `parent`,
-    /// and initialize its state. Returns the new NodeId.
+/// Users don't implement this directly — implement [`Component`]
+/// instead, which gets `Element` automatically via blanket impl.
+pub(crate) trait Element: Send {
     fn build(self: Box<Self>, renderer: &mut Renderer, parent: NodeId) -> NodeId;
+    fn update(self: Box<Self>, _renderer: &mut Renderer, _node_id: NodeId) {}
+}
 
-    /// Update an existing node with new configuration from this element.
-    ///
-    /// Called during reconciliation when a matching node is found.
-    /// Override this to update props while preserving local state.
-    /// Default: no-op (keeps existing state unchanged).
+/// Blanket implementation: every Component is automatically an Element.
+///
+/// - **Build**: creates a new node via `append_child` (calls `initial_state()`)
+/// - **Update**: swaps the component on the existing node (preserves state)
+impl<C: Component> Element for C {
+    fn build(self: Box<Self>, renderer: &mut Renderer, parent: NodeId) -> NodeId {
+        renderer.append_child(parent, *self)
+    }
+
     fn update(self: Box<Self>, renderer: &mut Renderer, node_id: NodeId) {
-        let _ = (renderer, node_id);
+        renderer.swap_component(node_id, *self);
     }
 }
 
-/// An entry in an Elements list: an element description with optional children.
+/// An entry in an Elements list: a component with optional children.
 pub(crate) struct ElementEntry {
     pub(crate) element: Box<dyn Element>,
     pub(crate) children: Option<Elements>,
@@ -41,7 +36,7 @@ pub(crate) struct ElementEntry {
     pub(crate) width_constraint: WidthConstraint,
 }
 
-/// A list of element descriptions for declarative tree building.
+/// A list of component descriptions for declarative tree building.
 ///
 /// Used with `Renderer::rebuild` to describe what the tree should
 /// look like. View functions return `Elements`.
@@ -49,9 +44,9 @@ pub(crate) struct ElementEntry {
 /// ```ignore
 /// fn my_view(state: &MyState) -> Elements {
 ///     let mut els = Elements::new();
-///     els.add(TextBlockEl::new().unstyled("Hello"));
+///     els.add(TextBlock::new().unstyled("Hello"));
 ///     if state.loading {
-///         els.add(SpinnerEl::new("Loading...")).key("spinner");
+///         els.add(Spinner::new("Loading...")).key("spinner");
 ///     }
 ///     els
 /// }
@@ -66,11 +61,33 @@ impl Elements {
         Self { items: Vec::new() }
     }
 
-    /// Add an element to the list.
+    /// Add a component to the list.
     ///
     /// Returns an [`ElementHandle`] that can be used to set a key
     /// for stable identity across rebuilds.
-    pub fn add<E: Element + 'static>(&mut self, element: E) -> ElementHandle<'_> {
+    pub fn add<C: Component>(&mut self, component: C) -> ElementHandle<'_> {
+        let type_id = TypeId::of::<C>();
+        self.items.push(ElementEntry {
+            element: Box::new(component),
+            children: None,
+            key: None,
+            type_id,
+            width_constraint: WidthConstraint::default(),
+        });
+        ElementHandle {
+            entry: self.items.last_mut().unwrap(),
+        }
+    }
+
+    /// Add a raw Element implementation (internal use only).
+    ///
+    /// Used by tests that need custom build/update behavior not
+    /// expressible through the Component trait alone.
+    #[allow(dead_code)]
+    pub(crate) fn add_element<E: Element + 'static>(
+        &mut self,
+        element: E,
+    ) -> ElementHandle<'_> {
         let type_id = TypeId::of::<E>();
         self.items.push(ElementEntry {
             element: Box::new(element),
@@ -84,11 +101,9 @@ impl Elements {
         }
     }
 
-    /// Add an element with nested children.
-    ///
-    /// The element is created first, then children are built as its
-    /// descendants.
-    pub fn add_with_children<E: Element + 'static>(
+    /// Add a raw Element with nested children (internal use only).
+    #[allow(dead_code)]
+    pub(crate) fn add_element_with_children<E: Element + 'static>(
         &mut self,
         element: E,
         children: Elements,
@@ -106,19 +121,39 @@ impl Elements {
         }
     }
 
-    /// Add a VStack wrapper around the given children.
+    /// Add a component with nested children.
     ///
-    /// Shorthand for `add_with_children(VStackEl, children)`.
+    /// The component is created first, then children are built as its
+    /// descendants. The component's `children()` method receives
+    /// these as the `slot` parameter.
+    pub fn add_with_children<C: Component>(
+        &mut self,
+        component: C,
+        children: Elements,
+    ) -> ElementHandle<'_> {
+        let type_id = TypeId::of::<C>();
+        self.items.push(ElementEntry {
+            element: Box::new(component),
+            children: Some(children),
+            key: None,
+            type_id,
+            width_constraint: WidthConstraint::default(),
+        });
+        ElementHandle {
+            entry: self.items.last_mut().unwrap(),
+        }
+    }
+
+    /// Add a VStack wrapper around the given children.
     pub fn group(&mut self, children: Elements) -> ElementHandle<'_> {
-        self.add_with_children(crate::elements::VStackEl, children)
+        self.add_with_children(crate::component::VStack, children)
     }
 
     /// Add an HStack wrapper around the given children.
     ///
-    /// Shorthand for `add_with_children(HStackEl, children)`.
     /// Children declare their width with `.width(WidthConstraint::Fixed(n))`.
     pub fn hstack(&mut self, children: Elements) -> ElementHandle<'_> {
-        self.add_with_children(crate::elements::HStackEl, children)
+        self.add_with_children(crate::component::HStack, children)
     }
 
     /// Consume the Elements and return the entries for reconciliation.

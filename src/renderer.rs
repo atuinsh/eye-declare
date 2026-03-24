@@ -48,11 +48,32 @@ impl Renderer {
     /// Add a component as a child of the given parent. Returns its NodeId.
     pub fn append_child<C: Component>(&mut self, parent: NodeId, component: C) -> NodeId {
         let id = NodeId(self.nodes.len());
+        let layout = component.layout();
         let mut node = Node::new(component);
         node.parent = Some(parent);
+        node.layout = layout;
         self.nodes.push(node);
         self.nodes[parent.0].children.push(id);
         id
+    }
+
+    /// Swap the component on an existing node, preserving state.
+    ///
+    /// Replaces the component (props) while keeping state intact.
+    /// Used by reconciliation and for imperative prop updates.
+    pub fn swap_component<C: Component>(&mut self, id: NodeId, component: C) {
+        let layout = component.layout();
+        self.nodes[id.0].component = Box::new(component);
+        self.nodes[id.0].layout = layout;
+    }
+
+    /// Read the component on a node, downcast to the concrete type.
+    pub fn component<C: Component>(&self, id: NodeId) -> &C {
+        self.nodes[id.0]
+            .component
+            .as_any_component()
+            .downcast_ref::<C>()
+            .expect("component type mismatch")
     }
 
     /// Shorthand: add a component as a child of the root. Returns its NodeId.
@@ -226,7 +247,7 @@ impl Renderer {
     /// ```ignore
     /// fn my_view(state: &AppState) -> Elements {
     ///     let mut els = Elements::new();
-    ///     els.add(TextBlockEl::new().unstyled("Hello"));
+    ///     els.add(TextBlock::new().unstyled("Hello"));
     ///     els
     /// }
     ///
@@ -858,6 +879,8 @@ mod tests {
     use ratatui_core::text::Line;
     use ratatui_widgets::paragraph::Paragraph;
 
+    /// Local test component for imperative tests. Uses Vec<String> state.
+    /// Named differently from the real TextBlock in components.
     struct TextBlock;
 
     impl Component for TextBlock {
@@ -1386,7 +1409,7 @@ mod tests {
 
         // Rebuild with a single new child
         let mut els = Elements::new();
-        els.add(TestTextEl::new("new1"));
+        els.add_element(TestTextEl::new("new1"));
         r.rebuild(container, els);
 
         let frame2 = r.render();
@@ -1401,11 +1424,11 @@ mod tests {
 
         // Build a nested structure: VStack with two text blocks
         let mut inner = Elements::new();
-        inner.add(TestTextEl::new("child1"));
-        inner.add(TestTextEl::new("child2"));
+        inner.add_element(TestTextEl::new("child1"));
+        inner.add_element(TestTextEl::new("child2"));
 
         let mut els = Elements::new();
-        els.add_with_children(crate::elements::VStackEl, inner);
+        els.add_with_children(VStack, inner);
         r.rebuild(container, els);
 
         let frame = r.render();
@@ -1438,9 +1461,9 @@ mod tests {
         fn view(thinking: bool) -> Elements {
             let mut els = Elements::new();
             if thinking {
-                els.add(TestTextEl::new("thinking..."));
+                els.add_element(TestTextEl::new("thinking..."));
             }
-            els.add(TestTextEl::new("message"));
+            els.add_element(TestTextEl::new("message"));
             els
         }
 
@@ -1466,13 +1489,13 @@ mod tests {
         let container = r.push(VStack);
 
         let mut children = Elements::new();
-        children.add(TestTextEl::new("grouped1"));
-        children.add(TestTextEl::new("grouped2"));
+        children.add_element(TestTextEl::new("grouped1"));
+        children.add_element(TestTextEl::new("grouped2"));
 
         let mut els = Elements::new();
-        els.add(TestTextEl::new("before"));
+        els.add_element(TestTextEl::new("before"));
         els.group(children);
-        els.add(TestTextEl::new("after"));
+        els.add_element(TestTextEl::new("after"));
         r.rebuild(container, els);
 
         let frame = r.render();
@@ -1516,7 +1539,7 @@ mod tests {
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(CustomWidgetEl { config: "custom!".to_string() });
+        els.add_element(CustomWidgetEl { config: "custom!".to_string() });
         r.rebuild(container, els);
 
         let frame = r.render();
@@ -1580,7 +1603,7 @@ mod tests {
 
         // First build
         let mut els = Elements::new();
-        els.add(CounterEl::new("first"));
+        els.add_element(CounterEl::new("first"));
         r.rebuild(container, els);
 
         let children_1 = r.children(container).to_vec();
@@ -1590,7 +1613,7 @@ mod tests {
 
         // Second rebuild with same type at same position
         let mut els = Elements::new();
-        els.add(CounterEl::new("updated"));
+        els.add_element(CounterEl::new("updated"));
         r.rebuild(container, els);
 
         let children_2 = r.children(container).to_vec();
@@ -1610,14 +1633,14 @@ mod tests {
 
         // Build with CounterEl
         let mut els = Elements::new();
-        els.add(CounterEl::new("counter"));
+        els.add_element(CounterEl::new("counter"));
         r.rebuild(container, els);
 
         let old_id = r.children(container)[0];
 
         // Rebuild with TestTextEl (different type)
         let mut els = Elements::new();
-        els.add(TestTextEl::new("text"));
+        els.add_element(TestTextEl::new("text"));
         r.rebuild(container, els);
 
         let new_id = r.children(container)[0];
@@ -1632,8 +1655,8 @@ mod tests {
 
         // Build: [A, B]
         let mut els = Elements::new();
-        els.add(CounterEl::new("A")).key("a");
-        els.add(CounterEl::new("B")).key("b");
+        els.add_element(CounterEl::new("A")).key("a");
+        els.add_element(CounterEl::new("B")).key("b");
         r.rebuild(container, els);
 
         let children_1 = r.children(container).to_vec();
@@ -1642,8 +1665,8 @@ mod tests {
 
         // Rebuild: [B, A] — reversed order
         let mut els = Elements::new();
-        els.add(CounterEl::new("B")).key("b");
-        els.add(CounterEl::new("A")).key("a");
+        els.add_element(CounterEl::new("B")).key("b");
+        els.add_element(CounterEl::new("A")).key("a");
         r.rebuild(container, els);
 
         let children_2 = r.children(container).to_vec();
@@ -1662,9 +1685,9 @@ mod tests {
 
         // Build: [A, B, C]
         let mut els = Elements::new();
-        els.add(CounterEl::new("A")).key("a");
-        els.add(CounterEl::new("B")).key("b");
-        els.add(CounterEl::new("C")).key("c");
+        els.add_element(CounterEl::new("A")).key("a");
+        els.add_element(CounterEl::new("B")).key("b");
+        els.add_element(CounterEl::new("C")).key("c");
         r.rebuild(container, els);
 
         let id_a = r.children(container)[0];
@@ -1672,8 +1695,8 @@ mod tests {
 
         // Rebuild: [A, C] — B removed
         let mut els = Elements::new();
-        els.add(CounterEl::new("A")).key("a");
-        els.add(CounterEl::new("C")).key("c");
+        els.add_element(CounterEl::new("A")).key("a");
+        els.add_element(CounterEl::new("C")).key("c");
         r.rebuild(container, els);
 
         let children = r.children(container).to_vec();
@@ -1688,9 +1711,9 @@ mod tests {
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(CounterEl::new("alpha")).key("first");
-        els.add(CounterEl::new("beta")).key("second");
-        els.add(CounterEl::new("gamma")); // no key
+        els.add_element(CounterEl::new("alpha")).key("first");
+        els.add_element(CounterEl::new("beta")).key("second");
+        els.add_element(CounterEl::new("gamma")); // no key
         r.rebuild(container, els);
 
         assert_eq!(
@@ -1712,7 +1735,7 @@ mod tests {
 
         // Build with a counter
         let mut els = Elements::new();
-        els.add(CounterEl::new("item")).key("c");
+        els.add_element(CounterEl::new("item")).key("c");
         r.rebuild(container, els);
 
         let id = r.find_by_key(container, "c").unwrap();
@@ -1721,7 +1744,7 @@ mod tests {
 
         // Rebuild — node should be reused, local state preserved
         let mut els = Elements::new();
-        els.add(CounterEl::new("updated-item")).key("c");
+        els.add_element(CounterEl::new("updated-item")).key("c");
         r.rebuild(container, els);
 
         let id_after = r.find_by_key(container, "c").unwrap();
@@ -1737,10 +1760,10 @@ mod tests {
 
         // Build nested: VStack > [A, B]
         let mut inner = Elements::new();
-        inner.add(CounterEl::new("A")).key("a");
-        inner.add(CounterEl::new("B")).key("b");
+        inner.add_element(CounterEl::new("A")).key("a");
+        inner.add_element(CounterEl::new("B")).key("b");
         let mut els = Elements::new();
-        els.add_with_children(crate::elements::VStackEl, inner).key("group");
+        els.add_with_children(VStack, inner).key("group");
         r.rebuild(container, els);
 
         let group_id = r.find_by_key(container, "group").unwrap();
@@ -1749,10 +1772,10 @@ mod tests {
 
         // Rebuild nested: VStack > [A, C] — B removed, C added
         let mut inner = Elements::new();
-        inner.add(CounterEl::new("A-updated")).key("a");
-        inner.add(CounterEl::new("C")).key("c");
+        inner.add_element(CounterEl::new("A-updated")).key("a");
+        inner.add_element(CounterEl::new("C")).key("c");
         let mut els = Elements::new();
-        els.add_with_children(crate::elements::VStackEl, inner).key("group");
+        els.add_with_children(VStack, inner).key("group");
         r.rebuild(container, els);
 
         // Group reused
@@ -1773,7 +1796,7 @@ mod tests {
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(CounterEl::new("something")).key("x");
+        els.add_element(CounterEl::new("something")).key("x");
         r.rebuild(container, els);
         assert_eq!(r.children(container).len(), 1);
 
@@ -1865,7 +1888,7 @@ mod tests {
 
         // Build with a ticked element
         let mut els = Elements::new();
-        els.add(CounterEl::new("item")).key("x");
+        els.add_element(CounterEl::new("item")).key("x");
         r.rebuild(container, els);
 
         let id = r.find_by_key(container, "x").unwrap();
@@ -1896,43 +1919,43 @@ mod tests {
     }
 
     #[test]
-    fn spinner_el_build_auto_registers_tick() {
+    fn spinner_build_auto_registers_tick() {
         let mut r = Renderer::new(10);
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(crate::elements::SpinnerEl::new("Loading..."));
+        els.add(crate::components::spinner::Spinner::new("Loading..."));
         r.rebuild(container, els);
 
         assert!(r.has_active());
     }
 
     #[test]
-    fn spinner_el_done_build_no_tick() {
+    fn spinner_done_build_no_tick() {
         let mut r = Renderer::new(10);
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(crate::elements::SpinnerEl::new("Done").done("Completed"));
+        els.add(crate::components::spinner::Spinner::new("Done").done("Completed"));
         r.rebuild(container, els);
 
         assert!(!r.has_active());
     }
 
     #[test]
-    fn spinner_el_update_to_done_unregisters() {
+    fn spinner_update_to_done_unregisters() {
         let mut r = Renderer::new(10);
         let container = r.push(VStack);
 
         // Build active spinner
         let mut els = Elements::new();
-        els.add(crate::elements::SpinnerEl::new("Loading...")).key("s");
+        els.add(crate::components::spinner::Spinner::new("Loading...")).key("s");
         r.rebuild(container, els);
         assert!(r.has_active());
 
         // Rebuild as done
         let mut els = Elements::new();
-        els.add(crate::elements::SpinnerEl::new("Done").done("Completed")).key("s");
+        els.add(crate::components::spinner::Spinner::new("Done").done("Completed")).key("s");
         r.rebuild(container, els);
         assert!(!r.has_active());
     }
@@ -2027,7 +2050,7 @@ mod tests {
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(LifecycleEl::new("hello")).key("a");
+        els.add_element(LifecycleEl::new("hello")).key("a");
         r.rebuild(container, els);
 
         let id = r.find_by_key(container, "a").unwrap();
@@ -2044,7 +2067,7 @@ mod tests {
 
         // First build — mount fires
         let mut els = Elements::new();
-        els.add(LifecycleEl::new("v1")).key("a");
+        els.add_element(LifecycleEl::new("v1")).key("a");
         r.rebuild(container, els);
 
         let id = r.find_by_key(container, "a").unwrap();
@@ -2056,7 +2079,7 @@ mod tests {
 
         // Second rebuild — reuse, mount should NOT fire again
         let mut els = Elements::new();
-        els.add(LifecycleEl::new("v2")).key("a");
+        els.add_element(LifecycleEl::new("v2")).key("a");
         r.rebuild(container, els);
 
         let state = r.state_mut::<LifecycleWidget>(id);
@@ -2070,7 +2093,7 @@ mod tests {
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(LifecycleEl::new("bye")).key("a");
+        els.add_element(LifecycleEl::new("bye")).key("a");
         r.rebuild(container, els);
 
         let id = r.find_by_key(container, "a").unwrap();
@@ -2138,7 +2161,7 @@ mod tests {
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(HookedCounterEl { label: "multi".into() }).key("m");
+        els.add_element(HookedCounterEl { label: "multi".into() }).key("m");
         r.rebuild(container, els);
 
         let id = r.find_by_key(container, "m").unwrap();
@@ -2235,8 +2258,8 @@ mod tests {
         let container = r.push(VStack);
 
         let mut row = Elements::new();
-        row.add(TestTextEl::new(">")).width(WidthConstraint::Fixed(2));
-        row.add(TestTextEl::new("hello"));
+        row.add_element(TestTextEl::new(">")).width(WidthConstraint::Fixed(2));
+        row.add_element(TestTextEl::new("hello"));
 
         let mut els = Elements::new();
         els.hstack(row);
@@ -2258,8 +2281,8 @@ mod tests {
         let container = r.push(VStack);
 
         let mut row = Elements::new();
-        row.add(TestTextEl::new("left"));
-        row.add(TestTextEl::new("right"));
+        row.add_element(TestTextEl::new("left"));
+        row.add_element(TestTextEl::new("right"));
 
         let mut els = Elements::new();
         els.hstack(row);
@@ -2280,14 +2303,14 @@ mod tests {
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(TestTextEl::new("above"));
+        els.add_element(TestTextEl::new("above"));
 
         let mut row = Elements::new();
-        row.add(TestTextEl::new("$")).width(WidthConstraint::Fixed(2));
-        row.add(TestTextEl::new("cmd"));
+        row.add_element(TestTextEl::new("$")).width(WidthConstraint::Fixed(2));
+        row.add_element(TestTextEl::new("cmd"));
         els.hstack(row);
 
-        els.add(TestTextEl::new("below"));
+        els.add_element(TestTextEl::new("below"));
         r.rebuild(container, els);
 
         let frame = r.render();
@@ -2307,8 +2330,8 @@ mod tests {
 
         // First build
         let mut row = Elements::new();
-        row.add(TestTextEl::new(">")).width(WidthConstraint::Fixed(2));
-        row.add(TestTextEl::new("v1"));
+        row.add_element(TestTextEl::new(">")).width(WidthConstraint::Fixed(2));
+        row.add_element(TestTextEl::new("v1"));
         let mut els = Elements::new();
         els.hstack(row).key("row");
         r.rebuild(container, els);
@@ -2318,8 +2341,8 @@ mod tests {
 
         // Rebuild — content changes but layout preserved
         let mut row = Elements::new();
-        row.add(TestTextEl::new("$")).width(WidthConstraint::Fixed(2));
-        row.add(TestTextEl::new("v2"));
+        row.add_element(TestTextEl::new("$")).width(WidthConstraint::Fixed(2));
+        row.add_element(TestTextEl::new("v2"));
         let mut els = Elements::new();
         els.hstack(row).key("row");
         r.rebuild(container, els);
@@ -2521,9 +2544,9 @@ mod tests {
         ) -> Option<Elements> {
             // Ignore slot — generate own children
             let mut row = Elements::new();
-            row.add(TestTextEl::new(&state.prefix))
+            row.add_element(TestTextEl::new(&state.prefix))
                 .width(WidthConstraint::Fixed(2));
-            row.add(TestTextEl::new(&state.label));
+            row.add_element(TestTextEl::new(&state.label));
 
             let mut els = Elements::new();
             els.hstack(row);
@@ -2569,7 +2592,7 @@ mod tests {
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(LabeledRowEl::new(">", "hello"));
+        els.add_element(LabeledRowEl::new(">", "hello"));
         r.rebuild(container, els);
 
         let frame = r.render();
@@ -2587,14 +2610,14 @@ mod tests {
 
         // First build
         let mut els = Elements::new();
-        els.add(LabeledRowEl::new(">", "v1")).key("row");
+        els.add_element(LabeledRowEl::new(">", "v1")).key("row");
         r.rebuild(container, els);
 
         let row_id = r.find_by_key(container, "row").unwrap();
 
         // Rebuild — composite is reused, children regenerated
         let mut els = Elements::new();
-        els.add(LabeledRowEl::new("$", "v2")).key("row");
+        els.add_element(LabeledRowEl::new("$", "v2")).key("row");
         r.rebuild(container, els);
 
         // Same row node reused
@@ -2613,11 +2636,11 @@ mod tests {
         let container = r.push(VStack);
 
         let mut inner = Elements::new();
-        inner.add(TestTextEl::new("child1"));
-        inner.add(TestTextEl::new("child2"));
+        inner.add_element(TestTextEl::new("child1"));
+        inner.add_element(TestTextEl::new("child2"));
 
         let mut els = Elements::new();
-        els.add_with_children(crate::elements::VStackEl, inner);
+        els.add_with_children(VStack, inner);
         r.rebuild(container, els);
 
         let frame = r.render();
@@ -2643,12 +2666,12 @@ mod tests {
         ) -> Option<Elements> {
             let mut els = Elements::new();
             // Add banner title
-            els.add(TestTextEl::new(state));
+            els.add_element(TestTextEl::new(state));
             // Include slot children
             if let Some(slot) = slot {
                 for _entry in slot.into_items() {
                     // Re-wrap each entry
-                    els.add(TestTextEl::new("slot"));
+                    els.add_element(TestTextEl::new("slot"));
                 }
             }
             Some(els)
@@ -2678,10 +2701,10 @@ mod tests {
         let container = r.push(VStack);
 
         let mut slot = Elements::new();
-        slot.add(TestTextEl::new("content"));
+        slot.add_element(TestTextEl::new("content"));
 
         let mut els = Elements::new();
-        els.add_with_children(BannerEl { title: "TITLE".into() }, slot);
+        els.add_element_with_children(BannerEl { title: "TITLE".into() }, slot);
         r.rebuild(container, els);
 
         let frame = r.render();
@@ -2698,9 +2721,9 @@ mod tests {
 
         // A LabeledRow (composite) inside a VStack
         let mut els = Elements::new();
-        els.add(TestTextEl::new("above"));
-        els.add(LabeledRowEl::new(">", "nested"));
-        els.add(TestTextEl::new("below"));
+        els.add_element(TestTextEl::new("above"));
+        els.add_element(LabeledRowEl::new(">", "nested"));
+        els.add_element(TestTextEl::new("below"));
         r.rebuild(container, els);
 
         let frame = r.render();
@@ -2769,7 +2792,7 @@ mod tests {
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(HookedCounterEl { label: "active".into() });
+        els.add_element(HookedCounterEl { label: "active".into() });
         r.rebuild(container, els);
 
         // Lifecycle should have registered an interval
@@ -2783,13 +2806,13 @@ mod tests {
 
         // Build with active interval
         let mut els = Elements::new();
-        els.add(HookedCounterEl { label: "active".into() }).key("c");
+        els.add_element(HookedCounterEl { label: "active".into() }).key("c");
         r.rebuild(container, els);
         assert!(r.has_active());
 
         // Update to "stop" — lifecycle re-runs, no interval registered → cleared
         let mut els = Elements::new();
-        els.add(HookedCounterEl { label: "stop".into() }).key("c");
+        els.add_element(HookedCounterEl { label: "stop".into() }).key("c");
         r.rebuild(container, els);
         assert!(!r.has_active());
     }
@@ -2800,7 +2823,7 @@ mod tests {
         let container = r.push(VStack);
 
         let mut els = Elements::new();
-        els.add(HookedCounterEl { label: "go".into() }).key("c");
+        els.add_element(HookedCounterEl { label: "go".into() }).key("c");
         r.rebuild(container, els);
 
         let id = r.find_by_key(container, "c").unwrap();
@@ -2847,7 +2870,7 @@ mod tests {
         }
 
         let mut els = Elements::new();
-        els.add(MountTrackerEl).key("mt");
+        els.add_element(MountTrackerEl).key("mt");
         r.rebuild(container, els);
 
         let id = r.find_by_key(container, "mt").unwrap();

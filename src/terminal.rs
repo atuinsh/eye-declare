@@ -16,11 +16,9 @@ use crate::node::NodeId;
 ///
 /// ```no_run
 /// use eye_declare::{Terminal, TextBlock};
-/// use ratatui_core::style::Style;
 ///
 /// let mut term = Terminal::new().unwrap();
-/// let id = term.push(TextBlock);
-/// term.state_mut::<TextBlock>(id).push_unstyled("Hello!");
+/// let id = term.push(TextBlock::new().unstyled("Hello!"));
 /// term.run(|event, renderer| {
 ///     // Return true to exit
 ///     false
@@ -62,6 +60,10 @@ impl Terminal {
 
     pub fn state_mut<C: Component>(&mut self, id: NodeId) -> &mut Tracked<C::State> {
         self.renderer.state_mut::<C>(id)
+    }
+
+    pub fn swap_component<C: Component>(&mut self, id: NodeId, component: C) {
+        self.renderer.swap_component(id, component)
     }
 
     pub fn freeze(&mut self, id: NodeId) {

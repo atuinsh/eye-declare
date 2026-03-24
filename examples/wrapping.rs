@@ -11,83 +11,68 @@ fn main() -> io::Result<()> {
     let mut stdout = io::stdout();
 
     // Header
-    let header = r.push(TextBlock);
-    {
-        let s = r.state_mut::<TextBlock>(header);
-        s.push(
-            "Display-Time Wrapping Demo",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
-        s.push(
-            format!(
-                "Terminal width: {} columns — resize to see reflow! Press q or Ctrl+C to exit.",
-                width
-            ),
-            Style::default().fg(Color::DarkGray),
-        );
-        s.push("", Style::default());
-    }
+    let header = r.push(
+        TextBlock::new()
+            .line(
+                "Display-Time Wrapping Demo",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .line(
+                format!(
+                    "Terminal width: {} columns — resize to see reflow! Press q or Ctrl+C to exit.",
+                    width
+                ),
+                Style::default().fg(Color::DarkGray),
+            )
+            .unstyled(""),
+    );
     flush(&mut r, &mut stdout)?;
     r.freeze(header);
 
     // Long paragraphs that will wrap
-    let para1 = r.push(TextBlock);
-    {
-        let s = r.state_mut::<TextBlock>(para1);
-        s.push(
+    let _para1 = r.push(
+        TextBlock::new().line(
             "This is a long paragraph that demonstrates display-time word wrapping. \
              The text is stored as a single logical line, and the framework wraps it \
              at render time based on the current terminal width. Try resizing your \
              terminal window — the text will reflow automatically. This is the same \
              approach used by Codex's tui2 architecture.",
             Style::default().fg(Color::White),
-        );
-    }
+        ),
+    );
 
-    let spacer = r.push(TextBlock);
-    {
-        r.state_mut::<TextBlock>(spacer).push("", Style::default());
-    }
-    r.freeze(spacer);
+    let spacer1 = r.push(TextBlock::new().unstyled(""));
+    r.freeze(spacer1);
 
-    let para2 = r.push(TextBlock);
-    {
-        let s = r.state_mut::<TextBlock>(para2);
-        s.push(
+    let _para2 = r.push(
+        TextBlock::new().line(
             "Here's a second paragraph with different styling to show that \
              multiple components each wrap independently. Each component computes \
              its own height based on wrapped line count, and the framework stacks \
              them vertically. The total content height adjusts as wrapping changes.",
             Style::default().fg(Color::Yellow),
-        );
-    }
+        ),
+    );
 
-    let spacer2 = r.push(TextBlock);
-    {
-        r.state_mut::<TextBlock>(spacer2).push("", Style::default());
-    }
+    let spacer2 = r.push(TextBlock::new().unstyled(""));
     r.freeze(spacer2);
 
-    let code_block = r.push(TextBlock);
-    {
-        let s = r.state_mut::<TextBlock>(code_block);
-        s.push("fn main() {", Style::default().fg(Color::Green));
-        s.push(
-            "    println!(\"Short lines like code don't wrap unless the terminal is very narrow.\");",
-            Style::default().fg(Color::Green),
-        );
-        s.push("}", Style::default().fg(Color::Green));
-    }
+    let _code_block = r.push(
+        TextBlock::new()
+            .line("fn main() {", Style::default().fg(Color::Green))
+            .line(
+                "    println!(\"Short lines like code don't wrap unless the terminal is very narrow.\");",
+                Style::default().fg(Color::Green),
+            )
+            .line("}", Style::default().fg(Color::Green)),
+    );
 
-    let spacer3 = r.push(TextBlock);
-    {
-        r.state_mut::<TextBlock>(spacer3).push("", Style::default());
-    }
+    let spacer3 = r.push(TextBlock::new().unstyled(""));
     r.freeze(spacer3);
 
-    let status = r.push(TextBlock);
+    let status = r.push(TextBlock::default());
 
     // Initial render
     update_status(&mut r, status, width);
@@ -129,13 +114,14 @@ fn main() -> io::Result<()> {
 }
 
 fn update_status(r: &mut InlineRenderer, id: eye_declare::NodeId, width: u16) {
-    let s = r.state_mut::<TextBlock>(id);
-    s.clear();
-    s.push(
-        format!("Current width: {} columns — press q to exit", width),
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::ITALIC),
+    r.swap_component(
+        id,
+        TextBlock::new().line(
+            format!("Current width: {} columns — press q to exit", width),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        ),
     );
 }
 

@@ -51,6 +51,11 @@ impl InlineRenderer {
         self.renderer.state_mut::<C>(id)
     }
 
+    /// Swap the component on an existing node, preserving state.
+    pub fn swap_component<C: Component>(&mut self, id: NodeId, component: C) {
+        self.renderer.swap_component(id, component)
+    }
+
     /// Freeze a component (skip future re-renders).
     pub fn freeze(&mut self, id: NodeId) {
         self.renderer.freeze(id)

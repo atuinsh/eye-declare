@@ -11,7 +11,7 @@ use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
 
-use eye_declare::{Elements, InlineRenderer, MarkdownEl, SpinnerEl, TextBlockEl, VStack};
+use eye_declare::{Elements, InlineRenderer, Markdown, Spinner, TextBlock, VStack};
 use ratatui_core::style::{Color, Style};
 
 // ---------------------------------------------------------------------------
@@ -43,23 +43,23 @@ fn chat_view(state: &AppState) -> Elements {
 
     // Render all messages with stable keys
     for (i, msg) in state.messages.iter().enumerate() {
-        els.add(MarkdownEl::new(msg)).key(format!("msg-{i}"));
+        els.add(Markdown::new(msg)).key(format!("msg-{i}"));
     }
 
     // Show thinking spinner if active (auto-animates via tick registration)
     if state.thinking {
-        els.add(SpinnerEl::new("Thinking...")).key("thinking");
+        els.add(Spinner::new("Thinking...")).key("thinking");
     }
 
     // Show tool call spinner if active (auto-animates via tick registration)
     if let Some(ref tool) = state.tool_running {
-        els.add(SpinnerEl::new(format!("Running {}...", tool)))
+        els.add(Spinner::new(format!("Running {}...", tool)))
             .key("tool");
     }
 
     // Separator at the bottom
     if !state.messages.is_empty() || state.thinking || state.tool_running.is_some() {
-        els.add(TextBlockEl::new().line("---", Style::default().fg(Color::DarkGray)));
+        els.add(TextBlock::new().line("---", Style::default().fg(Color::DarkGray)));
     }
 
     els
