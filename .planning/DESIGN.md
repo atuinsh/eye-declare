@@ -13,7 +13,7 @@ plan — we build toward this incrementally.
 - Horizontal + vertical layout (HStack/VStack, WidthConstraint)
 - Content insets (container chrome: borders, padding)
 - Composite children (slot-based children resolution)
-- Hooks system (declarative lifecycle via Hooks<S> collector)
+- Hooks system (declarative lifecycle via `Hooks<S>` collector)
 - InlineRenderer (growing scrollback), Terminal (event loop wrapper)
 
 ## Target Component Trait
