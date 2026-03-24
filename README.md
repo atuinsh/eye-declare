@@ -215,6 +215,28 @@ Application          State + view function + async event loop
         crossterm    Terminal I/O, event types
 ```
 
+### Inline rendering model
+
+eye_declare uses an **inline rendering model** — content grows downward into the terminal's native scrollback, like standard CLI output. This is fundamentally different from full-screen TUI frameworks (ratatui's `Terminal`, tui-realm, cursive) that redraw a fixed viewport.
+
+The tradeoff is deliberate. Inline rendering is the right model for AI assistants, build tools, and interactive prompts where output accumulates and earlier results should persist in scrollback for the user to review. Full-screen mode would erase that history.
+
+**How it works:**
+
+1. **Reconciliation** matches new elements against existing nodes by key or position. State is preserved when nodes are reused, so animations continue seamlessly and internal component state survives rebuilds.
+
+2. **Layout** measures each node's desired height (with word wrapping computed at render time) and allocates widths for horizontal containers. Content insets allow components to declare border/padding chrome while children render inside.
+
+3. **Rendering** produces a ratatui `Buffer` for each frame. The `InlineRenderer` diffs against the previous frame and emits only changed cells as ANSI escape sequences, wrapped in DEC synchronized output (`?2026h/l`) to prevent tearing.
+
+4. **Growth** is handled by emitting newlines to claim new terminal rows before writing content. Old rows naturally scroll into terminal scrollback.
+
+**Known limitation:** When content height exceeds the terminal height, the terminal itself scrolls — an event invisible to the application. This can cause cursor tracking drift during rapid updates with many concurrent animations. For long-running interactive sessions, a viewport renderer (fixed-height region with internal scrolling) would solve this; it's planned but not yet implemented. The `on_commit` callback mitigates the issue by evicting content from state before it grows too tall.
+
+### Design documents
+
+The `.planning/` directory contains the research and design documents that guided these decisions, including the target API design, event handling strategy, and implementation sequence.
+
 ## Crate Structure
 
 ```
