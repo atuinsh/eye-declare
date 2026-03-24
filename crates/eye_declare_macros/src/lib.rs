@@ -24,6 +24,7 @@ use proc_macro::TokenStream;
 /// - `"text"` — shorthand for `TextBlock::new().unstyled("text")`
 /// - `#(if cond { ... })` — conditional children
 /// - `#(for pat in iter { ... })` — loop children
+/// - `#(expr)` — splice an `Elements` value inline
 ///
 /// `key` is a special prop — it maps to `.key()` on the element handle,
 /// not a struct field. It provides stable identity for reconciliation.

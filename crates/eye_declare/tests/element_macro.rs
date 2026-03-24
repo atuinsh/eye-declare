@@ -180,3 +180,95 @@ fn mixed_content() {
     // 2 messages + 1 spinner + 1 text = 4
     assert_eq!(r.children(vstack_id).len(), 4);
 }
+
+#[test]
+fn splice_elements_inline() {
+    // Build Elements from a helper function
+    fn sub_view() -> Elements {
+        element! {
+            Spinner(key: "s1", label: "one")
+            Spinner(key: "s2", label: "two")
+        }
+    }
+
+    let els = element! {
+        VStack {
+            "before"
+            #(sub_view())
+            "after"
+        }
+    };
+
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+    let vstack_id = r.children(container)[0];
+    // "before" + 2 spliced spinners + "after" = 4
+    assert_eq!(r.children(vstack_id).len(), 4);
+    assert!(r.find_by_key(vstack_id, "s1").is_some());
+    assert!(r.find_by_key(vstack_id, "s2").is_some());
+}
+
+#[test]
+fn splice_variable() {
+    let inner = element! {
+        Markdown(key: "md", source: "hello".to_string())
+    };
+
+    let els = element! {
+        VStack {
+            #(inner)
+        }
+    };
+
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+    let vstack_id = r.children(container)[0];
+    assert_eq!(r.children(vstack_id).len(), 1);
+    assert!(r.find_by_key(vstack_id, "md").is_some());
+}
+
+#[test]
+fn splice_empty_elements() {
+    let empty = Elements::new();
+
+    let els = element! {
+        VStack {
+            "before"
+            #(empty)
+            "after"
+        }
+    };
+
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+    let vstack_id = r.children(container)[0];
+    // "before" + empty splice + "after" = 2
+    assert_eq!(r.children(vstack_id).len(), 2);
+}
+
+#[test]
+fn splice_in_loop() {
+    fn row(label: &str) -> Elements {
+        element! {
+            Spinner(label: label.to_string())
+        }
+    }
+
+    let items = ["a", "b", "c"];
+    let els = element! {
+        VStack {
+            #(for item in items {
+                #(row(item))
+            })
+        }
+    };
+
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+    let vstack_id = r.children(container)[0];
+    assert_eq!(r.children(vstack_id).len(), 3);
+}

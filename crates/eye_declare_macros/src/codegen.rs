@@ -94,6 +94,12 @@ fn generate_node(node: &Node) -> TokenStream {
                 }
             }
         }
+
+        Node::Splice(expr) => {
+            quote! {
+                __els.splice(#expr);
+            }
+        }
     }
 }
 

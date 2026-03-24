@@ -76,6 +76,8 @@ fn dashboard(state: &DashboardState) -> Elements {
             #(if let Some(ref err) = state.error {
                 TextBlock(lines: vec![(err.clone(), error_style)])
             })
+
+            #(footer_view(state))
         }
     }
 }
@@ -86,6 +88,7 @@ fn dashboard(state: &DashboardState) -> Elements {
 - **Keys** provide stable identity across rebuilds: `Spinner(key: "s", label: "...")`
 - **String literals** are auto-wrapped as `TextBlock`: `"hello"` becomes a single-line text block
 - **Control flow** uses `#(if)`, `#(if let)`, and `#(for)` for conditional and repeated elements
+- **Splice** interpolates pre-built `Elements` inline: `#(sub_view(state))`
 
 ## Components
 

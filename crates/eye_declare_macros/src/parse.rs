@@ -31,6 +31,8 @@ pub enum Node {
         iter: Expr,
         body: Vec<Node>,
     },
+    /// `#(expr)` — splice an Elements value inline.
+    Splice(Expr),
 }
 
 /// A prop on a component: `name: value`.
@@ -135,7 +137,9 @@ fn parse_control_flow(input: ParseStream) -> Result<Node> {
     } else if content.peek(Token![for]) {
         parse_for(&content)
     } else {
-        Err(content.error("expected `if` or `for` after #("))
+        // Any other expression — splice its Elements into the parent
+        let expr: Expr = content.parse()?;
+        Ok(Node::Splice(expr))
     }
 }
 

@@ -153,6 +153,15 @@ impl Elements {
         self.add_with_children(crate::component::HStack, children)
     }
 
+    /// Splice another Elements list into this one.
+    ///
+    /// All entries from `other` are appended to this list. This is used
+    /// by the `element!` macro's `#(expr)` syntax to interpolate
+    /// pre-built Elements inline.
+    pub fn splice(&mut self, other: Elements) {
+        self.items.extend(other.items);
+    }
+
     /// Consume the Elements and return the entries for reconciliation.
     pub(crate) fn into_items(self) -> Vec<ElementEntry> {
         self.items
