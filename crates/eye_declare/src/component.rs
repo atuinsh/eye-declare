@@ -7,6 +7,41 @@ use crate::hooks::Hooks;
 use crate::insets::Insets;
 use crate::node::Layout;
 
+/// Implement [`ChildCollector`] for a component that passes children
+/// through as slot children (like layout containers).
+///
+/// ```ignore
+/// use eye_declare::impl_slot_children;
+///
+/// #[derive(Default)]
+/// struct Card;
+/// impl Component for Card { /* ... */ }
+/// impl_slot_children!(Card);
+/// ```
+///
+/// This allows the component to accept children in the `element!` macro:
+/// ```ignore
+/// element! {
+///     Card {
+///         Spinner(label: "loading...")
+///         "some text"
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! impl_slot_children {
+    ($t:ty) => {
+        impl $crate::ChildCollector for $t {
+            type Collector = $crate::Elements;
+            type Output = $crate::ComponentWithSlot<$t>;
+
+            fn finish(self, collector: $crate::Elements) -> $crate::ComponentWithSlot<$t> {
+                $crate::ComponentWithSlot::new(self, collector)
+            }
+        }
+    };
+}
+
 /// Result of handling an input event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventResult {
@@ -178,6 +213,8 @@ impl Component for VStack {
     }
 }
 
+impl_slot_children!(VStack);
+
 /// A no-op container component for horizontal layout.
 ///
 /// HStack renders nothing itself — children are laid out
@@ -200,6 +237,8 @@ impl Component for HStack {
         Layout::Horizontal
     }
 }
+
+impl_slot_children!(HStack);
 
 #[cfg(test)]
 mod tests {

@@ -277,3 +277,170 @@ fn splice_in_loop() {
     let vstack_id = r.children(container)[0];
     assert_eq!(r.children(vstack_id).len(), 3);
 }
+
+// ---------------------------------------------------------------------------
+// Data children (TextBlock / Line / Span)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn text_block_with_line_span_children() {
+    let els = element! {
+        TextBlock {
+            Line {
+                Span(text: "hello")
+            }
+        }
+    };
+    // TextBlock absorbs data children — appears as a leaf in the element tree
+    assert_eq!(child_count(els), 1);
+}
+
+#[test]
+fn text_block_multiple_lines() {
+    let els = element! {
+        TextBlock {
+            Line {
+                Span(text: "line one")
+            }
+            Line {
+                Span(text: "line two")
+            }
+        }
+    };
+    assert_eq!(child_count(els), 1);
+}
+
+#[test]
+fn text_block_multi_span_line() {
+    use ratatui_core::style::{Color, Style};
+
+    let name = "World";
+    let els = element! {
+        TextBlock {
+            Line {
+                Span(text: "Hello, ", style: Style::default().fg(Color::Green))
+                Span(text: name.to_string())
+            }
+        }
+    };
+    assert_eq!(child_count(els), 1);
+}
+
+#[test]
+fn text_block_data_children_in_vstack() {
+    let els = element! {
+        VStack {
+            TextBlock {
+                Line {
+                    Span(text: "first")
+                }
+            }
+            TextBlock {
+                Line {
+                    Span(text: "second")
+                }
+            }
+        }
+    };
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+    let vstack_id = r.children(container)[0];
+    // Two TextBlock leaves
+    assert_eq!(r.children(vstack_id).len(), 2);
+}
+
+#[test]
+fn text_block_children_with_loop() {
+    let items = ["alpha", "beta", "gamma"];
+    let els = element! {
+        VStack {
+            #(for item in items {
+                TextBlock {
+                    Line {
+                        Span(text: item.to_string())
+                    }
+                }
+            })
+        }
+    };
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+    let vstack_id = r.children(container)[0];
+    assert_eq!(r.children(vstack_id).len(), 3);
+}
+
+#[test]
+fn text_block_with_key() {
+    let els = element! {
+        VStack {
+            TextBlock(key: "greeting") {
+                Line {
+                    Span(text: "hello")
+                }
+            }
+        }
+    };
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+    let vstack_id = r.children(container)[0];
+    assert!(r.find_by_key(vstack_id, "greeting").is_some());
+}
+
+#[test]
+fn text_block_children_render_content() {
+    // Verify that data children actually flow through to rendered output,
+    // not just that the tree structure is correct.
+    let els = element! {
+        TextBlock {
+            Line {
+                Span(text: "hello")
+            }
+        }
+    };
+
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+
+    let output = r.render();
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(
+        output_str.contains("hello"),
+        "expected rendered output to contain 'hello', got: {:?}",
+        output_str
+    );
+}
+
+#[test]
+fn text_block_multi_span_renders_both() {
+    use ratatui_core::style::{Color, Style};
+
+    let els = element! {
+        TextBlock {
+            Line {
+                Span(text: "foo", style: Style::default().fg(Color::Red))
+                Span(text: "bar")
+            }
+        }
+    };
+
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+
+    let output = r.render();
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(
+        output_str.contains("foo"),
+        "expected 'foo' in output: {:?}",
+        output_str
+    );
+    assert!(
+        output_str.contains("bar"),
+        "expected 'bar' in output: {:?}",
+        output_str
+    );
+}

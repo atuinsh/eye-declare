@@ -1,4 +1,5 @@
 pub mod app;
+pub mod children;
 pub mod component;
 pub mod components;
 pub mod element;
@@ -14,6 +15,7 @@ pub(crate) mod wrap;
 
 // Re-export key types at the crate root for convenience
 pub use app::{Application, ApplicationBuilder, CommittedElement, ControlFlow, Handle};
+pub use children::{AddTo, ChildCollector, ComponentWithSlot, DataHandle, SpliceInto};
 pub use component::{Component, EventResult, HStack, Tracked, VStack};
 pub use components::markdown::{Markdown, MarkdownState};
 pub use components::spinner::{Spinner, SpinnerState};

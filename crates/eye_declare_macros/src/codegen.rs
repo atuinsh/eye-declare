@@ -7,13 +7,14 @@ use crate::parse::{Node, Prop};
 pub fn generate_elements(nodes: &[Node]) -> TokenStream {
     let body = generate_nodes(nodes);
     quote! {{
-        let mut __els = ::eye_declare::Elements::new();
+        let mut __result = ::eye_declare::Elements::new();
+        let __els = &mut __result;
         #body
-        __els
+        __result
     }}
 }
 
-/// Generate code that adds nodes to a `__els: Elements` variable.
+/// Generate code that adds nodes to the current collector (`__els`).
 fn generate_nodes(nodes: &[Node]) -> TokenStream {
     let stmts: Vec<TokenStream> = nodes.iter().map(generate_node).collect();
     quote! { #(#stmts)* }
@@ -29,7 +30,10 @@ fn generate_node(node: &Node) -> TokenStream {
 
         Node::Text(lit) => {
             quote! {
-                __els.add(::eye_declare::TextBlock::new().unstyled(#lit));
+                ::eye_declare::AddTo::add_to(
+                    ::eye_declare::TextBlock::new().unstyled(#lit),
+                    __els,
+                );
             }
         }
 
@@ -97,7 +101,7 @@ fn generate_node(node: &Node) -> TokenStream {
 
         Node::Splice(expr) => {
             quote! {
-                __els.splice(#expr);
+                ::eye_declare::SpliceInto::splice_into(#expr, __els);
             }
         }
     }
@@ -139,31 +143,38 @@ fn generate_component(
         }}
     };
 
-    // Add to elements (with or without children)
+    // Apply special props
+    let key_call = key_expr.map(|k| quote! { .key(#k) });
+
+    // Add to collector (with or without children)
     let add_call = match children {
         Some(child_nodes) => {
             let children_code = generate_nodes(child_nodes);
             quote! {
-                let mut __children = ::eye_declare::Elements::new();
-                // Shadow outer __els so nested components add to __children
                 {
-                    let __els = &mut __children;
-                    #children_code
+                    let mut __collector =
+                        <<#type_name as ::eye_declare::ChildCollector>::Collector>::default();
+                    {
+                        let __els = &mut __collector;
+                        #children_code
+                    }
+                    let __output =
+                        <#type_name as ::eye_declare::ChildCollector>::finish(
+                            #construct,
+                            __collector,
+                        );
+                    ::eye_declare::AddTo::add_to(__output, __els) #key_call;
                 }
-                __els.add_with_children(#construct, __children)
             }
         }
         None => {
-            quote! { __els.add(#construct) }
+            quote! {
+                {
+                    ::eye_declare::AddTo::add_to(#construct, __els) #key_call;
+                }
+            }
         }
     };
 
-    // Apply special props
-    let key_call = key_expr.map(|k| quote! { .key(#k) });
-
-    quote! {
-        {
-            #add_call #key_call;
-        }
-    }
+    add_call
 }
