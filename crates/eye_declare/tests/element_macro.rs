@@ -1,5 +1,6 @@
 use eye_declare::{
-    Elements, InlineRenderer, Line, Markdown, Span, Spinner, TextBlock, VStack, element,
+    Column, Elements, HStack, InlineRenderer, Line, Markdown, Span, Spinner, TextBlock, VStack,
+    WidthConstraint, element,
 };
 
 /// Helper: build elements into a renderer and return child count.
@@ -441,6 +442,88 @@ fn text_block_multi_span_renders_both() {
     assert!(
         output_str.contains("bar"),
         "expected 'bar' in output: {:?}",
+        output_str
+    );
+}
+
+// ---------------------------------------------------------------------------
+// HStack / Column layout
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hstack_with_columns() {
+    let els = element! {
+        HStack {
+            Column(width: WidthConstraint::Fixed(6)) {
+                "left"
+            }
+            Column {
+                "right"
+            }
+        }
+    };
+
+    let mut r = InlineRenderer::new(20);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+
+    let output = r.render();
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(
+        output_str.contains("left"),
+        "expected 'left' in output: {:?}",
+        output_str
+    );
+    assert!(
+        output_str.contains("right"),
+        "expected 'right' in output: {:?}",
+        output_str
+    );
+}
+
+#[test]
+fn hstack_bare_children_default_to_fill() {
+    // Components without Column wrapper should still work in HStack
+    let els = element! {
+        HStack {
+            "one"
+            "two"
+        }
+    };
+
+    let mut r = InlineRenderer::new(20);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+    let hstack_id = r.children(container)[0];
+    // Two children, both Fill (default)
+    assert_eq!(r.children(hstack_id).len(), 2);
+}
+
+#[test]
+fn hstack_mixed_columns_and_bare() {
+    let els = element! {
+        HStack {
+            Column(width: WidthConstraint::Fixed(4)) {
+                "fix"
+            }
+            "fill"
+        }
+    };
+
+    let mut r = InlineRenderer::new(20);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+
+    let output = r.render();
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(
+        output_str.contains("fix"),
+        "expected 'fix' in output: {:?}",
+        output_str
+    );
+    assert!(
+        output_str.contains("fill"),
+        "expected 'fill' in output: {:?}",
         output_str
     );
 }

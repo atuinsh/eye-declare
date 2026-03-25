@@ -5,7 +5,7 @@ use ratatui_core::{buffer::Buffer, layout::Rect};
 use crate::element::Elements;
 use crate::hooks::Hooks;
 use crate::insets::Insets;
-use crate::node::Layout;
+use crate::node::{Layout, WidthConstraint};
 
 /// Implement [`ChildCollector`] for a component that passes children
 /// through as slot children (like layout containers).
@@ -169,6 +169,16 @@ pub trait Component: Send + Sync + 'static {
         Layout::default()
     }
 
+    /// Width constraint for this component within a horizontal container.
+    ///
+    /// Override to declare a fixed or custom width. The renderer reads
+    /// this at build time to allocate horizontal space.
+    ///
+    /// Default: [`WidthConstraint::Fill`] (take remaining space).
+    fn width_constraint(&self) -> WidthConstraint {
+        WidthConstraint::default()
+    }
+
     /// Declare lifecycle effects for this component.
     ///
     /// Called by the framework after build and update. Use the `hooks`
@@ -239,6 +249,51 @@ impl Component for HStack {
 }
 
 impl_slot_children!(HStack);
+
+/// A container for a single child within an [`HStack`], with a width constraint.
+///
+/// Column renders nothing itself — it passes children through and
+/// declares its width via [`Component::width_constraint`].
+///
+/// ```ignore
+/// element! {
+///     HStack {
+///         Column(width: Fixed(2)) {
+///             Spinner(label: "loading")
+///         }
+///         Column {
+///             TextBlock { Line { Span(text: "hello") } }
+///         }
+///     }
+/// }
+/// ```
+pub struct Column {
+    pub width: WidthConstraint,
+}
+
+impl Default for Column {
+    fn default() -> Self {
+        Self {
+            width: WidthConstraint::Fill,
+        }
+    }
+}
+
+impl Component for Column {
+    type State = ();
+
+    fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &()) {}
+
+    fn desired_height(&self, _width: u16, _state: &()) -> u16 {
+        0
+    }
+
+    fn width_constraint(&self) -> WidthConstraint {
+        self.width
+    }
+}
+
+impl_slot_children!(Column);
 
 #[cfg(test)]
 mod tests {

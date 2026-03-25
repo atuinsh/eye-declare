@@ -53,9 +53,11 @@ impl Renderer {
     /// Add a component as a child of the given parent. Returns its NodeId.
     pub fn append_child<C: Component>(&mut self, parent: NodeId, component: C) -> NodeId {
         let layout = component.layout();
+        let width_constraint = component.width_constraint();
         let mut node = Node::new(component);
         node.parent = Some(parent);
         node.layout = layout;
+        node.width_constraint = width_constraint;
         let id = self.nodes.alloc(node);
         self.nodes[parent].children.push(id);
         id
@@ -67,8 +69,10 @@ impl Renderer {
     /// Used by reconciliation and for imperative prop updates.
     pub fn swap_component<C: Component>(&mut self, id: NodeId, component: C) {
         let layout = component.layout();
+        let width_constraint = component.width_constraint();
         self.nodes[id].component = Box::new(component);
         self.nodes[id].layout = layout;
+        self.nodes[id].width_constraint = width_constraint;
     }
 
     /// Shorthand: add a component as a child of the root. Returns its NodeId.
@@ -511,7 +515,8 @@ impl Renderer {
                 // REUSE: update props, preserve local state
                 entry.element.update(self, old_id);
                 self.nodes[old_id].parent = Some(parent);
-                self.nodes[old_id].width_constraint = entry.width_constraint;
+                self.nodes[old_id].width_constraint =
+                    resolve_width_constraint(&self.nodes[old_id], entry.width_constraint);
                 // Guarantee re-render after props update
                 self.nodes[old_id].force_dirty = true;
                 self.apply_lifecycle(old_id);
@@ -528,7 +533,8 @@ impl Renderer {
                 let id = entry.element.build(self, parent);
                 self.nodes[id].element_type_id = Some(entry.type_id);
                 self.nodes[id].key = entry.key;
-                self.nodes[id].width_constraint = entry.width_constraint;
+                self.nodes[id].width_constraint =
+                    resolve_width_constraint(&self.nodes[id], entry.width_constraint);
                 self.apply_lifecycle(id);
                 self.fire_mount(id);
 
@@ -564,7 +570,8 @@ impl Renderer {
             let node_id = entry.element.build(self, parent);
             self.nodes[node_id].element_type_id = Some(entry.type_id);
             self.nodes[node_id].key = entry.key;
-            self.nodes[node_id].width_constraint = entry.width_constraint;
+            self.nodes[node_id].width_constraint =
+                resolve_width_constraint(&self.nodes[node_id], entry.width_constraint);
             self.apply_lifecycle(node_id);
             self.fire_mount(node_id);
 
@@ -823,6 +830,19 @@ impl Renderer {
             self.nodes[id].state.clear_dirty();
             self.nodes[id].force_dirty = false;
         }
+    }
+}
+
+/// Resolve the effective width constraint for a node.
+///
+/// Component-declared constraint takes priority; falls back to the
+/// entry's constraint (set via `ElementHandle::width()`).
+fn resolve_width_constraint(node: &Node, entry_constraint: WidthConstraint) -> WidthConstraint {
+    let comp = node.component.width_constraint_erased();
+    if comp != WidthConstraint::default() {
+        comp
+    } else {
+        entry_constraint
     }
 }
 

@@ -45,6 +45,7 @@ pub(crate) trait AnyComponent: Send + Sync {
     fn is_focusable_erased(&self, state: &dyn Any) -> bool;
     fn content_inset_erased(&self, state: &dyn Any) -> Insets;
     fn children_erased(&self, state: &dyn Any, slot: Option<Elements>) -> Option<Elements>;
+    fn width_constraint_erased(&self) -> WidthConstraint;
     fn lifecycle_erased(&self, state: &dyn Any) -> LifecycleOutput;
 }
 
@@ -101,6 +102,10 @@ impl<C: Component> AnyComponent for C {
             .downcast_ref::<C::State>()
             .expect("state type mismatch in children_erased");
         self.children(state, slot)
+    }
+
+    fn width_constraint_erased(&self) -> WidthConstraint {
+        self.width_constraint()
     }
 
     fn lifecycle_erased(&self, state: &dyn Any) -> LifecycleOutput {
