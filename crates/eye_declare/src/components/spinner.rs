@@ -23,19 +23,39 @@ const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"
 /// Spinner::new("Loading...")
 /// Spinner::new("Done").done("Completed!")
 /// ```
-#[derive(Default)]
 pub struct Spinner {
     pub label: String,
     pub done: bool,
     pub done_label: Option<String>,
+    pub hide_checkmark: bool,
+    pub label_first: bool,
+    pub label_style: Style,
+    pub done_label_style: Style,
+    pub spinner_style: Style,
+    pub checkmark_style: Style,
+}
+
+impl Default for Spinner {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            done: false,
+            done_label: None,
+            hide_checkmark: false,
+            label_first: false,
+            label_style: Style::default().fg(Color::DarkGray),
+            done_label_style: Style::default().fg(Color::Green),
+            spinner_style: Style::default().fg(Color::DarkGray),
+            checkmark_style: Style::default().fg(Color::Green),
+        }
+    }
 }
 
 impl Spinner {
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
-            done: false,
-            done_label: None,
+            ..Default::default()
         }
     }
 
@@ -54,24 +74,11 @@ impl Spinner {
 pub struct SpinnerState {
     /// Current animation frame index. Increment to animate.
     pub frame: usize,
-    /// Style for the spinner character. Defaults to cyan.
-    pub spinner_style: Style,
-    /// Style for the label text. Defaults to dim italic.
-    pub label_style: Style,
-    /// Style for the done checkmark + label. Defaults to green.
-    pub done_style: Style,
 }
 
 impl SpinnerState {
     pub fn new() -> Self {
-        Self {
-            frame: 0,
-            spinner_style: Style::default().fg(Color::Cyan),
-            label_style: Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-            done_style: Style::default().fg(Color::Green),
-        }
+        Self { frame: 0 }
     }
 
     /// Advance the animation by one frame.
@@ -92,16 +99,37 @@ impl Component for Spinner {
     fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
         let line = if self.done {
             let label = self.done_label.as_deref().unwrap_or(&self.label);
-            Line::from(vec![
-                Span::styled("✓ ", state.done_style),
-                Span::styled(label.to_string(), state.done_style),
-            ])
+
+            if self.label_first {
+                if self.hide_checkmark {
+                    Line::from(vec![Span::styled(label.to_string(), self.done_label_style)])
+                } else {
+                    Line::from(vec![
+                        Span::styled(label.to_string(), self.done_label_style),
+                        Span::styled("✓ ", self.checkmark_style),
+                    ])
+                }
+            } else {
+                if self.hide_checkmark {
+                    Line::from(vec![Span::styled(label.to_string(), self.done_label_style)])
+                } else {
+                    Line::from(vec![
+                        Span::styled("✓ ", self.checkmark_style),
+                        Span::styled(label.to_string(), self.done_label_style),
+                    ])
+                }
+            }
         } else {
             let frame_str = FRAMES[state.frame % FRAMES.len()];
-            Line::from(vec![
-                Span::styled(format!("{} ", frame_str), state.spinner_style),
-                Span::styled(self.label.clone(), state.label_style),
-            ])
+            let label = Span::styled(self.label.clone(), self.label_style);
+
+            if self.label_first {
+                let frame = Span::styled(format!(" {}", frame_str), self.spinner_style);
+                Line::from(vec![label, frame])
+            } else {
+                let frame = Span::styled(format!("{} ", frame_str), self.spinner_style);
+                Line::from(vec![frame, label])
+            }
         };
         Paragraph::new(line).render(area, buf);
     }
