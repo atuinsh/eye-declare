@@ -164,6 +164,7 @@ pub struct ApplicationBuilder<S: Send + 'static> {
     root_contexts: Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
     ctrl_c: CtrlCBehavior,
     keyboard_protocol: KeyboardProtocol,
+    extra_newlines_at_exit: usize,
     bracketed_paste: bool,
 }
 
@@ -273,6 +274,20 @@ impl<S: Send + 'static> ApplicationBuilder<S> {
         self
     }
 
+    /// Set the number of extra newlines to add at exit.
+    ///
+    /// This is useful for applications that need to add extra newlines at exit
+    /// to ensure that the last line of output is visible, for example,
+    /// when using a prompt that uses cursor manipulation (e.g.,
+    /// Powerlevel10k's PROMPT_SP or instant prompt) which can
+    /// overwrite the line immediately above the prompt.
+    ///
+    /// Default: 0.
+    pub fn extra_newlines_at_exit(mut self, extra_newlines: usize) -> Self {
+        self.extra_newlines_at_exit = extra_newlines;
+        self
+    }
+
     /// Build the Application and its Handle.
     ///
     /// Queries terminal size if width was not specified, which may
@@ -313,6 +328,7 @@ impl<S: Send + 'static> ApplicationBuilder<S> {
             exit,
             ctrl_c: self.ctrl_c,
             keyboard_protocol: self.keyboard_protocol,
+            extra_newlines_at_exit: self.extra_newlines_at_exit,
             bracketed_paste: self.bracketed_paste,
         };
 
@@ -373,6 +389,7 @@ pub struct Application<S: Send + 'static> {
     exit: Arc<AtomicBool>,
     ctrl_c: CtrlCBehavior,
     keyboard_protocol: KeyboardProtocol,
+    extra_newlines_at_exit: usize,
     bracketed_paste: bool,
 }
 
@@ -387,6 +404,7 @@ impl<S: Send + 'static> Application<S> {
             root_contexts: Vec::new(),
             ctrl_c: CtrlCBehavior::default(),
             keyboard_protocol: KeyboardProtocol::default(),
+            extra_newlines_at_exit: 0,
             bracketed_paste: false,
         }
     }
@@ -602,7 +620,10 @@ impl<S: Send + 'static> Application<S> {
         // for shell prompts that use cursor manipulation (e.g.,
         // Powerlevel10k's PROMPT_SP or instant prompt) which can
         // overwrite the line immediately above the prompt.
-        let _ = write!(stdout, "\n\n");
+        let _ = write!(stdout, "\n");
+        for _ in 0..self.extra_newlines_at_exit {
+            let _ = write!(stdout, "\n");
+        }
         let _ = stdout.flush();
     }
 
