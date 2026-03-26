@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use ratatui_core::{buffer::Buffer, layout::Rect};
 
 use crate::component::{Component, Tracked};
+use crate::context::ContextMap;
 use crate::element::Elements;
 use crate::hooks::Hooks;
 use crate::insets::Insets;
@@ -57,7 +58,11 @@ pub(crate) trait AnyComponent: Send + Sync {
     fn content_inset_erased(&self, state: &dyn Any) -> Insets;
     fn children_erased(&self, state: &dyn Any, slot: Option<Elements>) -> Option<Elements>;
     fn width_constraint_erased(&self) -> WidthConstraint;
-    fn lifecycle_erased(&self, state: &dyn Any) -> LifecycleOutput;
+    fn lifecycle_erased(
+        &self,
+        tracked_state: &mut dyn Any,
+        context: &ContextMap,
+    ) -> LifecycleOutput;
 }
 
 impl<C: Component> AnyComponent for C {
@@ -119,16 +124,32 @@ impl<C: Component> AnyComponent for C {
         self.width_constraint()
     }
 
-    fn lifecycle_erased(&self, state: &dyn Any) -> LifecycleOutput {
-        let state = state
-            .downcast_ref::<C::State>()
+    fn lifecycle_erased(
+        &self,
+        tracked_state: &mut dyn Any,
+        context: &ContextMap,
+    ) -> LifecycleOutput {
+        let tracked = tracked_state
+            .downcast_mut::<Tracked<C::State>>()
             .expect("state type mismatch in lifecycle_erased");
-        let mut hooks = Hooks::<C::State>::new();
-        self.lifecycle(&mut hooks, state);
-        let autofocus = hooks.autofocus();
+
+        // Phase 1: collect hooks with immutable state reference
+        let (effects, autofocus, provided, consumers) = {
+            let state: &C::State = tracked;
+            let mut hooks = Hooks::<C::State>::new();
+            self.lifecycle(&mut hooks, state);
+            hooks.decompose()
+        };
+
+        // Phase 2: run context consumers with mutable tracked state
+        for consumer in consumers {
+            consumer(context, tracked);
+        }
+
         LifecycleOutput {
-            effects: hooks.into_effects(),
+            effects,
             autofocus,
+            provided,
         }
     }
 }
@@ -208,6 +229,7 @@ pub(crate) enum EffectKind {
 pub(crate) struct LifecycleOutput {
     pub effects: Vec<Effect>,
     pub autofocus: bool,
+    pub provided: Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
 }
 
 /// A registered effect for a node.

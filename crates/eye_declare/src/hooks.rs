@@ -1,7 +1,25 @@
+use std::any::{Any, TypeId};
 use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
+use crate::component::Tracked;
+use crate::context::ContextMap;
 use crate::node::{Effect, EffectKind, TypedEffectHandler};
+
+/// A type-erased context consumer callback.
+///
+/// Created by [`Hooks::use_context`] and executed by the framework
+/// during reconciliation with the current context map and mutable
+/// tracked state.
+pub(crate) type ConsumerFn<S> = Box<dyn FnOnce(&ContextMap, &mut Tracked<S>) + Send>;
+
+/// A tuple of the decomposed hooks.
+pub(crate) type Decomposed<S> = (
+    Vec<Effect>,
+    bool,
+    Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
+    Vec<ConsumerFn<S>>,
+);
 
 /// Effect collector for declarative lifecycle management.
 ///
@@ -19,6 +37,8 @@ use crate::node::{Effect, EffectKind, TypedEffectHandler};
 /// | [`use_mount`](Hooks::use_mount) | Once, after the component is first built |
 /// | [`use_unmount`](Hooks::use_unmount) | Once, when the component is removed |
 /// | [`use_autofocus`](Hooks::use_autofocus) | Requests focus when the component mounts |
+/// | [`provide_context`](Hooks::provide_context) | Makes a value available to descendants |
+/// | [`use_context`](Hooks::use_context) | Reads a value provided by an ancestor |
 ///
 /// # Example
 ///
@@ -34,6 +54,8 @@ use crate::node::{Effect, EffectKind, TypedEffectHandler};
 pub struct Hooks<S: 'static> {
     effects: Vec<Effect>,
     autofocus: bool,
+    provided: Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
+    consumers: Vec<ConsumerFn<S>>,
     _marker: PhantomData<S>,
 }
 
@@ -42,6 +64,8 @@ impl<S: Send + Sync + 'static> Hooks<S> {
         Self {
             effects: Vec::new(),
             autofocus: false,
+            provided: Vec::new(),
+            consumers: Vec::new(),
             _marker: PhantomData,
         }
     }
@@ -104,13 +128,60 @@ impl<S: Send + Sync + 'static> Hooks<S> {
         self.autofocus = true;
     }
 
-    /// Whether autofocus was requested.
-    pub(crate) fn autofocus(&self) -> bool {
-        self.autofocus
+    /// Provide a context value to all descendant components.
+    ///
+    /// The value is available during this reconciliation pass to any
+    /// descendant that calls [`use_context`](Hooks::use_context) with
+    /// the same type `T`. If an ancestor already provides `T`, this
+    /// component's value shadows it for the subtree.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn lifecycle(&self, hooks: &mut Hooks<MyState>, _state: &MyState) {
+    ///     hooks.provide_context(self.event_sender.clone());
+    /// }
+    /// ```
+    pub fn provide_context<T: Any + Send + Sync>(&mut self, value: T) {
+        self.provided.push((TypeId::of::<T>(), Box::new(value)));
     }
 
-    /// Consume the hooks and return collected effects.
-    pub(crate) fn into_effects(self) -> Vec<Effect> {
-        self.effects
+    /// Read a context value provided by an ancestor component.
+    ///
+    /// The `handler` is called with `Option<&T>` (the context value,
+    /// or `None` if no ancestor provides `T`) and `&mut Tracked<S>`
+    /// (the component's mutable state). The handler always fires —
+    /// use the `Option` to handle the absent case.
+    ///
+    /// The handler runs during reconciliation, after the component's
+    /// `lifecycle` method returns.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn lifecycle(&self, hooks: &mut Hooks<MyState>, _state: &MyState) {
+    ///     hooks.use_context::<Sender<AppEvent>>(|sender, state| {
+    ///         state.tx = sender.cloned();
+    ///     });
+    /// }
+    /// ```
+    pub fn use_context<T: Any + Send + Sync + 'static>(
+        &mut self,
+        handler: impl FnOnce(Option<&T>, &mut Tracked<S>) + Send + 'static,
+    ) {
+        let type_id = TypeId::of::<T>();
+        self.consumers.push(Box::new(
+            move |context: &ContextMap, tracked: &mut Tracked<S>| {
+                let value = context
+                    .get_by_type_id(type_id)
+                    .and_then(|v| v.downcast_ref::<T>());
+                handler(value, tracked);
+            },
+        ));
+    }
+
+    /// Consume the hooks, returning effects, provided contexts, and consumers.
+    pub(crate) fn decompose(self) -> Decomposed<S> {
+        (self.effects, self.autofocus, self.provided, self.consumers)
     }
 }

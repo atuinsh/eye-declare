@@ -1,9 +1,11 @@
+use std::any::{Any, TypeId};
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use ratatui_core::{buffer::Buffer, layout::Rect};
 
 use crate::component::{Component, EventResult, Tracked, VStack};
+use crate::context::{ContextMap, SavedContext};
 use crate::element::{ElementEntry, Elements};
 use crate::frame::Frame;
 use crate::node::{
@@ -25,6 +27,9 @@ pub struct Renderer {
     cursor_hint: Option<(u16, u16)>,
     /// Registered effects per node. Multiple effects per node supported.
     effects: HashMap<NodeId, Vec<Effect>>,
+    /// Context values available during reconciliation. Providers push
+    /// values before their subtree is processed and pop them after.
+    context: ContextMap,
 }
 
 impl Renderer {
@@ -42,6 +47,7 @@ impl Renderer {
             focused: None,
             cursor_hint: None,
             effects: HashMap::new(),
+            context: ContextMap::new(),
         }
     }
 
@@ -519,7 +525,8 @@ impl Renderer {
                     resolve_width_constraint(&self.nodes[old_id], entry.width_constraint);
                 // Guarantee re-render after props update
                 self.nodes[old_id].force_dirty = true;
-                self.apply_lifecycle(old_id);
+                let provided = self.apply_lifecycle(old_id);
+                let saved = self.push_context(provided);
 
                 // Resolve children: component decides (slot = external children)
                 let resolved = self.resolve_children(old_id, entry.children);
@@ -527,6 +534,7 @@ impl Renderer {
                     self.reconcile_children(old_id, els.into_items());
                 }
 
+                self.pop_context(saved);
                 old_id
             } else {
                 // BUILD: create new node
@@ -535,8 +543,9 @@ impl Renderer {
                 self.nodes[id].key = entry.key;
                 self.nodes[id].width_constraint =
                     resolve_width_constraint(&self.nodes[id], entry.width_constraint);
-                self.apply_lifecycle(id);
+                let provided = self.apply_lifecycle(id);
                 self.fire_mount(id);
+                let saved = self.push_context(provided);
 
                 // Resolve children: component decides (slot = external children)
                 let resolved = self.resolve_children(id, entry.children);
@@ -544,6 +553,7 @@ impl Renderer {
                     self.build_elements(id, els);
                 }
 
+                self.pop_context(saved);
                 id
             };
 
@@ -572,13 +582,16 @@ impl Renderer {
             self.nodes[node_id].key = entry.key;
             self.nodes[node_id].width_constraint =
                 resolve_width_constraint(&self.nodes[node_id], entry.width_constraint);
-            self.apply_lifecycle(node_id);
+            let provided = self.apply_lifecycle(node_id);
             self.fire_mount(node_id);
+            let saved = self.push_context(provided);
 
             let resolved = self.resolve_children(node_id, entry.children);
             if let Some(els) = resolved {
                 self.build_elements(node_id, els);
             }
+
+            self.pop_context(saved);
         }
     }
 
@@ -592,13 +605,15 @@ impl Renderer {
 
     /// Run the component's lifecycle method and apply resulting effects.
     ///
-    /// If the component called `manage_effects()`, existing effects
-    /// are replaced with the new set. Otherwise effects are untouched
-    /// (backward compatibility with imperative registration).
-    fn apply_lifecycle(&mut self, id: NodeId) {
+    /// Context consumers declared via `use_context` are executed
+    /// immediately with the current context map. Returns any context
+    /// values the component provides for its descendants.
+    fn apply_lifecycle(&mut self, id: NodeId) -> Vec<(TypeId, Box<dyn Any + Send + Sync>)> {
         let output = {
-            let node = &self.nodes[id];
-            node.component.lifecycle_erased(node.state.inner_as_any())
+            let context = &self.context;
+            let node = &mut self.nodes[id];
+            node.component
+                .lifecycle_erased(node.state.as_any_mut(), context)
         };
         if output.effects.is_empty() {
             self.effects.remove(&id);
@@ -606,6 +621,7 @@ impl Renderer {
             self.effects.insert(id, output.effects);
         }
         self.nodes[id].autofocus = output.autofocus;
+        output.provided
     }
 
     /// Tombstone a node and all its descendants without touching the
@@ -622,6 +638,51 @@ impl Renderer {
             self.focused = None;
         }
         self.nodes.free(id);
+    }
+
+    /// Insert a root-level context value, available to all components.
+    ///
+    /// Root contexts are never popped — they persist for the lifetime
+    /// of the renderer. Used by [`ApplicationBuilder::with_context`](crate::ApplicationBuilder::with_context).
+    pub fn set_root_context<T: Any + Send + Sync>(&mut self, value: T) {
+        self.context.insert(TypeId::of::<T>(), Box::new(value));
+    }
+
+    /// Insert a root-level context value from a type-erased box.
+    pub(crate) fn set_root_context_raw(
+        &mut self,
+        type_id: TypeId,
+        value: Box<dyn Any + Send + Sync>,
+    ) {
+        self.context.insert(type_id, value);
+    }
+
+    /// Push provided context values onto the context map, saving
+    /// previous values for later restoration.
+    fn push_context(
+        &mut self,
+        provided: Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
+    ) -> SavedContext {
+        let mut saved = Vec::with_capacity(provided.len());
+        for (type_id, value) in provided {
+            let old = self.context.insert(type_id, value);
+            saved.push((type_id, old));
+        }
+        saved
+    }
+
+    /// Restore context values saved by a previous `push_context` call.
+    fn pop_context(&mut self, saved: SavedContext) {
+        for (type_id, old) in saved {
+            match old {
+                Some(v) => {
+                    self.context.insert(type_id, v);
+                }
+                None => {
+                    self.context.remove(&type_id);
+                }
+            }
+        }
     }
 
     /// Set the rendering width (e.g., on terminal resize).
@@ -3009,5 +3070,189 @@ mod tests {
         r.rebuild(container, Elements::new());
         let entries = unmount_log.lock().unwrap();
         assert!(entries.contains(&"unmounted".to_string()));
+    }
+
+    // --- Context tests ---
+
+    /// A component that provides a context value to descendants.
+    struct ContextProvider {
+        value: String,
+    }
+
+    impl Component for ContextProvider {
+        type State = ();
+        fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &()) {}
+        fn desired_height(&self, _width: u16, _state: &()) -> u16 {
+            0
+        }
+        fn lifecycle(&self, hooks: &mut crate::hooks::Hooks<()>, _state: &()) {
+            hooks.provide_context(self.value.clone());
+        }
+    }
+
+    crate::impl_slot_children!(ContextProvider);
+
+    /// A component that consumes a context value.
+    struct ContextConsumer;
+
+    #[derive(Default)]
+    struct ContextConsumerState {
+        received: Option<String>,
+    }
+
+    impl Component for ContextConsumer {
+        type State = ContextConsumerState;
+        fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
+            if let Some(ref val) = state.received {
+                let text: Vec<Line> = vec![Line::raw(val.as_str())];
+                let para = Paragraph::new(text);
+                ratatui_core::widgets::Widget::render(para, area, buf);
+            }
+        }
+        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
+            if state.received.is_some() { 1 } else { 0 }
+        }
+        fn lifecycle(&self, hooks: &mut crate::hooks::Hooks<Self::State>, _state: &Self::State) {
+            hooks.use_context::<String>(|value, state| {
+                state.received = value.cloned();
+            });
+        }
+    }
+
+    #[test]
+    fn context_provider_to_consumer() {
+        let mut r = Renderer::new(20);
+        let container = r.push(VStack);
+
+        let mut els = Elements::new();
+        let mut children = Elements::new();
+        children.add(ContextConsumer).key("consumer");
+        els.add_with_children(
+            ContextProvider {
+                value: "hello from context".into(),
+            },
+            children,
+        )
+        .key("provider");
+        r.rebuild(container, els);
+
+        // The consumer should have received the context value
+        let consumer_id = r.find_by_key(container, "provider").unwrap();
+        let inner_consumer = r
+            .children(consumer_id)
+            .iter()
+            .find(|&&id| r.node_key(id) == Some("consumer"))
+            .copied()
+            .unwrap();
+        let state = r.state_mut::<ContextConsumer>(inner_consumer);
+        assert_eq!(state.received.as_deref(), Some("hello from context"));
+    }
+
+    #[test]
+    fn context_absent_passes_none() {
+        let mut r = Renderer::new(20);
+        let container = r.push(VStack);
+
+        // Consumer without any provider above it
+        let mut els = Elements::new();
+        els.add(ContextConsumer).key("consumer");
+        r.rebuild(container, els);
+
+        let consumer_id = r.find_by_key(container, "consumer").unwrap();
+        let state = r.state_mut::<ContextConsumer>(consumer_id);
+        assert_eq!(state.received, None);
+    }
+
+    #[test]
+    fn context_shadowing() {
+        // Inner provider shadows outer provider of the same type
+        let mut r = Renderer::new(20);
+        let container = r.push(VStack);
+
+        let mut inner_children = Elements::new();
+        inner_children.add(ContextConsumer).key("inner-consumer");
+
+        let mut inner_provider_els = Elements::new();
+        inner_provider_els
+            .add_with_children(
+                ContextProvider {
+                    value: "inner".into(),
+                },
+                inner_children,
+            )
+            .key("inner-provider");
+
+        let mut outer_children = Elements::new();
+        outer_children.splice(inner_provider_els);
+        outer_children.add(ContextConsumer).key("outer-consumer");
+
+        let mut els = Elements::new();
+        els.add_with_children(
+            ContextProvider {
+                value: "outer".into(),
+            },
+            outer_children,
+        )
+        .key("outer-provider");
+        r.rebuild(container, els);
+
+        // Inner consumer should see "inner" (shadowed)
+        let outer_provider_id = r.find_by_key(container, "outer-provider").unwrap();
+        let inner_provider_id = r.find_by_key(outer_provider_id, "inner-provider").unwrap();
+        let inner_consumer_id = r.find_by_key(inner_provider_id, "inner-consumer").unwrap();
+        let state = r.state_mut::<ContextConsumer>(inner_consumer_id);
+        assert_eq!(state.received.as_deref(), Some("inner"));
+
+        // Outer consumer (sibling of inner provider) should see "outer"
+        let outer_consumer_id = r.find_by_key(outer_provider_id, "outer-consumer").unwrap();
+        let state = r.state_mut::<ContextConsumer>(outer_consumer_id);
+        assert_eq!(state.received.as_deref(), Some("outer"));
+    }
+
+    #[test]
+    fn root_context_available_to_all() {
+        let mut r = Renderer::new(20);
+        r.set_root_context("root-value".to_string());
+        let container = r.push(VStack);
+
+        let mut els = Elements::new();
+        els.add(ContextConsumer).key("consumer");
+        r.rebuild(container, els);
+
+        let consumer_id = r.find_by_key(container, "consumer").unwrap();
+        let state = r.state_mut::<ContextConsumer>(consumer_id);
+        assert_eq!(state.received.as_deref(), Some("root-value"));
+    }
+
+    #[test]
+    fn context_updates_on_rebuild() {
+        let mut r = Renderer::new(20);
+        let container = r.push(VStack);
+
+        // First build with "v1"
+        let mut els = Elements::new();
+        let mut children = Elements::new();
+        children.add(ContextConsumer).key("consumer");
+        els.add_with_children(ContextProvider { value: "v1".into() }, children)
+            .key("provider");
+        r.rebuild(container, els);
+
+        let provider_id = r.find_by_key(container, "provider").unwrap();
+        let consumer_id = r.find_by_key(provider_id, "consumer").unwrap();
+        let state = r.state_mut::<ContextConsumer>(consumer_id);
+        assert_eq!(state.received.as_deref(), Some("v1"));
+
+        // Rebuild with "v2" — consumer should see updated value
+        let mut els = Elements::new();
+        let mut children = Elements::new();
+        children.add(ContextConsumer).key("consumer");
+        els.add_with_children(ContextProvider { value: "v2".into() }, children)
+            .key("provider");
+        r.rebuild(container, els);
+
+        let provider_id = r.find_by_key(container, "provider").unwrap();
+        let consumer_id = r.find_by_key(provider_id, "consumer").unwrap();
+        let state = r.state_mut::<ContextConsumer>(consumer_id);
+        assert_eq!(state.received.as_deref(), Some("v2"));
     }
 }

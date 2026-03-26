@@ -1,3 +1,4 @@
+use std::any::{Any, TypeId};
 use std::time::Duration;
 
 use crate::component::{Component, EventResult, Tracked};
@@ -94,6 +95,23 @@ impl InlineRenderer {
     /// Access a component's tracked state for mutation.
     pub fn state_mut<C: Component>(&mut self, id: NodeId) -> &mut Tracked<C::State> {
         self.renderer.state_mut::<C>(id)
+    }
+
+    /// Register a root-level context value available to all components.
+    ///
+    /// See [`ApplicationBuilder::with_context`](crate::ApplicationBuilder::with_context)
+    /// for the higher-level API.
+    pub fn set_root_context<T: Any + Send + Sync>(&mut self, value: T) {
+        self.renderer.set_root_context(value);
+    }
+
+    /// Register a root-level context value from a type-erased box.
+    pub(crate) fn set_root_context_raw(
+        &mut self,
+        type_id: TypeId,
+        value: Box<dyn Any + Send + Sync>,
+    ) {
+        self.renderer.set_root_context_raw(type_id, value);
     }
 
     /// Swap the component on an existing node, preserving state.

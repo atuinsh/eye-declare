@@ -211,6 +211,41 @@ Available hooks:
 | `use_mount(handler)` | Once, after the component is first built |
 | `use_unmount(handler)` | Once, when the component is removed |
 | `use_autofocus()` | Requests focus when the component mounts |
+| `provide_context(value)` | Makes a value available to all descendants |
+| `use_context::<T>(handler)` | Reads a value provided by an ancestor |
+
+### Context
+
+The context system lets ancestor components provide typed values to their descendants without prop-drilling. This is the primary mechanism for connecting components to app-level services.
+
+**Root-level context** — register values on the application builder:
+
+```rust
+let (mut app, handle) = Application::builder()
+    .state(MyState::default())
+    .view(my_view)
+    .with_context(event_sender)       // available to all components
+    .with_context(AppConfig::new())   // multiple types supported
+    .build()?;
+```
+
+**Component-level context** — provide and consume in lifecycle:
+
+```rust
+// Provider: makes a value available to descendants
+fn lifecycle(&self, hooks: &mut Hooks<MyState>, _state: &MyState) {
+    hooks.provide_context(self.theme.clone());
+}
+
+// Consumer: reads a value from an ancestor
+fn lifecycle(&self, hooks: &mut Hooks<MyState>, _state: &MyState) {
+    hooks.use_context::<Theme>(|theme, state| {
+        state.current_theme = theme.cloned();
+    });
+}
+```
+
+The `use_context` handler always fires with `Option<&T>` — `None` if no ancestor provides the type. Inner providers shadow outer providers of the same type within their subtree.
 
 ## Layout
 
@@ -280,7 +315,13 @@ app.run().await?;
 ```
 
 ```rust
-// Interactive: raw mode, event handling, Ctrl+C
+// Component-driven interactive: raw mode with context-based event handling
+// Components handle their own events and dispatch app-domain actions via channels
+app.run_loop().await?;
+```
+
+```rust
+// Raw interactive: direct access to terminal events (escape hatch)
 app.run_interactive(|event, state| {
     // handle terminal events, mutate state
     ControlFlow::Continue
@@ -288,6 +329,26 @@ app.run_interactive(|event, state| {
 ```
 
 Multiple handle updates between frames are batched into a single rebuild.
+
+### Terminal Options
+
+The builder supports configuring terminal protocols for interactive modes:
+
+```rust
+Application::builder()
+    .state(state)
+    .view(view)
+    .ctrl_c(CtrlCBehavior::Deliver)         // route Ctrl+C to components (default: Exit)
+    .keyboard_protocol(KeyboardProtocol::Enhanced)  // kitty protocol (default: Legacy)
+    .bracketed_paste(true)                   // distinguish pastes from typing (default: false)
+    .build()?;
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `ctrl_c` | `Exit` | `Exit` intercepts Ctrl+C; `Deliver` routes it to components |
+| `keyboard_protocol` | `Legacy` | `Enhanced` enables kitty protocol for key disambiguation |
+| `bracketed_paste` | `false` | Delivers pasted text as `Event::Paste(String)` |
 
 ### Committed Scrollback
 

@@ -1,16 +1,28 @@
+use std::any::{Any, TypeId};
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Guard that restores terminal state on drop (including panic unwind).
-struct RawModeGuard;
+struct RawModeGuard {
+    bracketed_paste: bool,
+    keyboard_enhanced: bool,
+}
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
+        use crossterm::execute;
+        let mut stdout = io::stdout();
+        if self.keyboard_enhanced {
+            let _ = execute!(stdout, crossterm::event::PopKeyboardEnhancementFlags);
+        }
+        if self.bracketed_paste {
+            let _ = execute!(stdout, crossterm::event::DisableBracketedPaste);
+        }
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = io::stdout().write_all(b"\x1b[?25h");
-        let _ = io::stdout().flush();
+        let _ = stdout.write_all(b"\x1b[?25h");
+        let _ = stdout.flush();
     }
 }
 
@@ -26,6 +38,7 @@ use crate::node::NodeId;
 type StateUpdateFn<S> = Box<dyn FnOnce(&mut S) + Send>;
 type ViewFn<S> = Box<dyn Fn(&S) -> Elements>;
 type CommitCallbackFn<S> = Box<dyn FnMut(&CommittedElement, &mut S)>;
+type EventHandlerFn<'a, S> = Option<&'a mut dyn FnMut(&Event, &mut S) -> ControlFlow>;
 
 /// Information about an element that has scrolled into terminal scrollback.
 ///
@@ -53,6 +66,44 @@ pub enum ControlFlow {
     Continue,
     /// Stop the event loop and return from `run_interactive`.
     Exit,
+}
+
+/// How the framework handles Ctrl+C in interactive modes.
+///
+/// Set via [`ApplicationBuilder::ctrl_c`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CtrlCBehavior {
+    /// Exit the event loop immediately (default).
+    ///
+    /// Ctrl+C is intercepted before reaching any component.
+    #[default]
+    Exit,
+    /// Deliver Ctrl+C to the component tree like any other key event.
+    ///
+    /// The application is responsible for exiting via [`Handle::exit`]
+    /// or [`ControlFlow::Exit`]. This enables patterns like "press
+    /// Ctrl+C again to exit" confirmations.
+    Deliver,
+}
+
+/// Which keyboard protocol to use in interactive modes.
+///
+/// Set via [`ApplicationBuilder::keyboard_protocol`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeyboardProtocol {
+    /// Standard terminal key reporting (default).
+    ///
+    /// Compatible with all terminals. Some key combinations are
+    /// ambiguous (e.g., Tab vs Ctrl+I, Enter vs Ctrl+M).
+    #[default]
+    Legacy,
+    /// Enable the [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)
+    /// if the terminal supports it, falling back to legacy silently.
+    ///
+    /// Provides key disambiguation, modifier reporting, and
+    /// key release events in supporting terminals (kitty,
+    /// WezTerm, foot, Windows Terminal, etc.).
+    Enhanced,
 }
 
 /// A thread-safe handle for sending state updates to a running [`Application`].
@@ -110,6 +161,10 @@ pub struct ApplicationBuilder<S: Send + 'static> {
     view_fn: Option<ViewFn<S>>,
     width: Option<u16>,
     on_commit: Option<CommitCallbackFn<S>>,
+    root_contexts: Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
+    ctrl_c: CtrlCBehavior,
+    keyboard_protocol: KeyboardProtocol,
+    bracketed_paste: bool,
 }
 
 impl<S: Send + 'static> ApplicationBuilder<S> {
@@ -149,6 +204,75 @@ impl<S: Send + 'static> ApplicationBuilder<S> {
         self
     }
 
+    /// Set how Ctrl+C is handled in interactive modes.
+    ///
+    /// Default: [`CtrlCBehavior::Exit`] — Ctrl+C exits immediately.
+    ///
+    /// Set to [`CtrlCBehavior::Deliver`] to route Ctrl+C through the
+    /// component tree, enabling custom handling (e.g., confirmation
+    /// dialogs or "press again to exit" patterns).
+    ///
+    /// Has no effect on [`Application::run`] (non-interactive mode).
+    pub fn ctrl_c(mut self, behavior: CtrlCBehavior) -> Self {
+        self.ctrl_c = behavior;
+        self
+    }
+
+    /// Set the keyboard protocol for interactive modes.
+    ///
+    /// Default: [`KeyboardProtocol::Legacy`] — standard key reporting.
+    ///
+    /// [`KeyboardProtocol::Enhanced`] enables the kitty keyboard
+    /// protocol for key disambiguation and modifier reporting in
+    /// supporting terminals. Falls back to legacy silently if the
+    /// terminal does not support it.
+    ///
+    /// Has no effect on [`Application::run`] (non-interactive mode).
+    pub fn keyboard_protocol(mut self, protocol: KeyboardProtocol) -> Self {
+        self.keyboard_protocol = protocol;
+        self
+    }
+
+    /// Enable bracketed paste mode.
+    ///
+    /// When enabled, pasted text is delivered as a single
+    /// [`Event::Paste(String)`](crossterm::event::Event::Paste) instead
+    /// of individual key events. This lets text input components
+    /// distinguish typed input from pasted content.
+    ///
+    /// Default: `false`. Safe to enable — terminals that don't support
+    /// it silently ignore the escape sequence.
+    ///
+    /// Has no effect on [`Application::run`] (non-interactive mode).
+    pub fn bracketed_paste(mut self, enabled: bool) -> Self {
+        self.bracketed_paste = enabled;
+        self
+    }
+
+    /// Register a root-level context value available to all components.
+    ///
+    /// Components access root contexts via
+    /// [`Hooks::use_context`](crate::Hooks::use_context) in their
+    /// lifecycle method. Root contexts persist for the lifetime of
+    /// the application.
+    ///
+    /// Call multiple times for different types. Calling twice with
+    /// the same type replaces the previous value.
+    ///
+    /// ```ignore
+    /// let (mut app, handle) = Application::builder()
+    ///     .state(MyState::default())
+    ///     .view(my_view)
+    ///     .with_context(event_sender)
+    ///     .with_context(AppConfig { theme: "dark".into() })
+    ///     .build()?;
+    /// ```
+    pub fn with_context<T: Any + Send + Sync>(mut self, value: T) -> Self {
+        self.root_contexts
+            .push((TypeId::of::<T>(), Box::new(value)));
+        self
+    }
+
     /// Build the Application and its Handle.
     ///
     /// Queries terminal size if width was not specified, which may
@@ -173,6 +297,9 @@ impl<S: Send + 'static> ApplicationBuilder<S> {
         };
 
         let mut inline = InlineRenderer::new(width);
+        for (type_id, value) in self.root_contexts {
+            inline.set_root_context_raw(type_id, value);
+        }
         let container = inline.push(VStack);
 
         let app = Application {
@@ -184,6 +311,9 @@ impl<S: Send + 'static> ApplicationBuilder<S> {
             on_commit: self.on_commit,
             rx,
             exit,
+            ctrl_c: self.ctrl_c,
+            keyboard_protocol: self.keyboard_protocol,
+            bracketed_paste: self.bracketed_paste,
         };
 
         Ok((app, handle))
@@ -241,6 +371,9 @@ pub struct Application<S: Send + 'static> {
     on_commit: Option<CommitCallbackFn<S>>,
     rx: mpsc::UnboundedReceiver<StateUpdateFn<S>>,
     exit: Arc<AtomicBool>,
+    ctrl_c: CtrlCBehavior,
+    keyboard_protocol: KeyboardProtocol,
+    bracketed_paste: bool,
 }
 
 impl<S: Send + 'static> Application<S> {
@@ -251,6 +384,10 @@ impl<S: Send + 'static> Application<S> {
             view_fn: None,
             width: None,
             on_commit: None,
+            root_contexts: Vec::new(),
+            ctrl_c: CtrlCBehavior::default(),
+            keyboard_protocol: KeyboardProtocol::default(),
+            bracketed_paste: false,
         }
     }
 
@@ -282,12 +419,69 @@ impl<S: Send + 'static> Application<S> {
         self.render_loop(&mut stdout).await
     }
 
-    /// Run the interactive event loop.
+    /// Run the interactive event loop with component-driven event handling.
+    ///
+    /// Enables terminal raw mode and processes terminal events
+    /// (keyboard, mouse, resize) through the component tree's
+    /// [`handle_event`](crate::Component::handle_event) method,
+    /// including focus management and Tab cycling. Unlike
+    /// [`run_interactive`](Application::run_interactive), raw terminal
+    /// events are **not** exposed to the caller.
+    ///
+    /// Use this when components handle their own events and translate
+    /// them into app-domain actions via channels or other mechanisms
+    /// passed through the [context system](crate::Hooks::provide_context).
+    ///
+    /// Exits when [`Handle::exit`] is called, or when all Handles are
+    /// dropped and no effects remain active. Ctrl+C exits by default
+    /// (configurable via [`ApplicationBuilder::ctrl_c`]).
+    ///
+    /// ```ignore
+    /// let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    /// let (mut app, handle) = Application::builder()
+    ///     .state(MyState::default())
+    ///     .view(my_view)
+    ///     .with_context(tx)
+    ///     .build()?;
+    ///
+    /// // App event loop in a separate task
+    /// let h = handle.clone();
+    /// tokio::spawn(async move {
+    ///     while let Some(event) = rx.recv().await {
+    ///         match event {
+    ///             AppEvent::Submit(val) => h.update(|s| s.result = val),
+    ///             AppEvent::Quit => { h.exit(); break; }
+    ///         }
+    ///     }
+    /// });
+    ///
+    /// app.run_loop().await?;
+    /// ```
+    pub async fn run_loop(&mut self) -> io::Result<()> {
+        let mut stdout = io::stdout();
+
+        // Initial build + render before entering raw mode
+        self.rebuild();
+        self.flush_to(&mut stdout)?;
+
+        let guard = self.enter_raw_mode()?;
+        let result = self.interactive_loop(None, &mut stdout).await;
+        self.leave_raw_mode(guard, &mut stdout);
+
+        result
+    }
+
+    /// Run the interactive event loop with a raw event handler.
     ///
     /// Enables terminal raw mode and uses `tokio::select!` to
     /// multiplex terminal events, handle updates, and effect ticks.
     /// The handler receives terminal events and mutable state;
-    /// return [`ControlFlow::Exit`] to stop. Ctrl+C always exits.
+    /// return [`ControlFlow::Exit`] to stop. Ctrl+C exits by default
+    /// (configurable via [`ApplicationBuilder::ctrl_c`]).
+    ///
+    /// For most applications, prefer [`run_loop`](Application::run_loop)
+    /// with the context system. Use this when you need direct access
+    /// to raw terminal events.
     pub async fn run_interactive(
         &mut self,
         mut handler: impl FnMut(&Event, &mut S) -> ControlFlow,
@@ -298,23 +492,9 @@ impl<S: Send + 'static> Application<S> {
         self.rebuild();
         self.flush_to(&mut stdout)?;
 
-        crossterm::terminal::enable_raw_mode()?;
-        let _guard = RawModeGuard;
-
-        let result = self.event_loop(&mut handler, &mut stdout).await;
-
-        // Reclaim trailing blank rows so the shell prompt appears
-        // tight against the content (e.g., after removing an input box).
-        let finalize_bytes = self.inline.finalize();
-        if !finalize_bytes.is_empty() {
-            stdout.write_all(&finalize_bytes)?;
-            stdout.flush()?;
-        }
-
-        // Guard handles disable_raw_mode + cursor restore on drop,
-        // but do it explicitly here for the clean newline.
-        drop(_guard);
-        writeln!(stdout)?;
+        let guard = self.enter_raw_mode()?;
+        let result = self.interactive_loop(Some(&mut handler), &mut stdout).await;
+        self.leave_raw_mode(guard, &mut stdout);
 
         result
     }
@@ -371,6 +551,58 @@ impl<S: Send + 'static> Application<S> {
 
     // --- Internals ---
 
+    /// Enable raw mode and any configured terminal protocols.
+    /// Returns a guard that restores everything on drop.
+    fn enter_raw_mode(&self) -> io::Result<RawModeGuard> {
+        use crossterm::execute;
+        let mut stdout = io::stdout();
+
+        crossterm::terminal::enable_raw_mode()?;
+
+        let bracketed_paste = self.bracketed_paste;
+        if bracketed_paste {
+            let _ = execute!(stdout, crossterm::event::EnableBracketedPaste);
+        }
+
+        let keyboard_enhanced = self.keyboard_protocol == KeyboardProtocol::Enhanced && {
+            // Only push if the terminal supports it
+            crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
+        };
+        if keyboard_enhanced {
+            let _ = execute!(
+                stdout,
+                crossterm::event::PushKeyboardEnhancementFlags(
+                    crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                        | crossterm::event::KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                        | crossterm::event::KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                )
+            );
+        }
+
+        Ok(RawModeGuard {
+            bracketed_paste,
+            keyboard_enhanced,
+        })
+    }
+
+    /// Finalize after an interactive loop: reclaim blank rows, restore terminal.
+    ///
+    /// Best-effort: I/O errors during teardown are silently ignored so
+    /// the original loop result is never shadowed. The guard is dropped
+    /// first to disable protocols and raw mode before writing the final
+    /// newline.
+    fn leave_raw_mode(&mut self, guard: RawModeGuard, stdout: &mut impl Write) {
+        let finalize_bytes = self.inline.finalize();
+        // Drop guard first — disables protocols while raw mode is still
+        // active, then disables raw mode, then restores cursor.
+        drop(guard);
+        if !finalize_bytes.is_empty() {
+            let _ = stdout.write_all(&finalize_bytes);
+            let _ = stdout.flush();
+        }
+        let _ = writeln!(stdout);
+    }
+
     async fn render_loop(&mut self, writer: &mut impl Write) -> io::Result<()> {
         // Initial build + render
         self.rebuild();
@@ -416,8 +648,9 @@ impl<S: Send + 'static> Application<S> {
             self.check_commits();
         }
 
-        // Final flush + reclaim trailing blank rows
+        // Final flush + commit check + reclaim trailing blank rows
         self.flush_to(writer)?;
+        self.check_commits();
         let finalize_bytes = self.inline.finalize();
         if !finalize_bytes.is_empty() {
             writer.write_all(&finalize_bytes)?;
@@ -427,13 +660,24 @@ impl<S: Send + 'static> Application<S> {
         Ok(())
     }
 
-    async fn event_loop(
+    /// Unified interactive event loop. Handles terminal events, Handle
+    /// updates, and effect ticks. If `handler` is `Some`, raw events are
+    /// forwarded to it after component dispatch; if `None`, events are
+    /// only routed through the component tree.
+    ///
+    /// Exits when:
+    /// - `Handle::exit` is called
+    /// - `handler` returns `ControlFlow::Exit`
+    /// - All Handles are dropped and no effects remain active
+    /// - Ctrl+C is pressed (when `ctrl_c` is `CtrlCBehavior::Exit`)
+    async fn interactive_loop(
         &mut self,
-        handler: &mut impl FnMut(&Event, &mut S) -> ControlFlow,
+        mut handler: EventHandlerFn<'_, S>,
         stdout: &mut impl Write,
     ) -> io::Result<()> {
         let mut event_stream = crossterm::event::EventStream::new();
         let mut tick_interval = tokio::time::interval(Duration::from_millis(16));
+        let mut channel_open = true;
 
         loop {
             if self.exit.load(Ordering::Acquire) {
@@ -441,6 +685,11 @@ impl<S: Send + 'static> Application<S> {
             }
 
             let has_active = self.inline.has_active();
+
+            // Exit when channel closed and no effects remain
+            if !channel_open && !has_active {
+                break;
+            }
 
             tokio::select! {
                 maybe_event = event_stream.next() => {
@@ -450,16 +699,18 @@ impl<S: Send + 'static> Application<S> {
                         None => break, // stream ended
                     };
 
-                    // Ctrl+C always exits
-                    if let Event::Key(KeyEvent {
-                        code: KeyCode::Char('c'),
-                        modifiers,
-                        kind: KeyEventKind::Press,
-                        ..
-                    }) = &evt
-                        && modifiers.contains(KeyModifiers::CONTROL) {
-                            break;
-                        }
+                    // Ctrl+C handling
+                    if self.ctrl_c == CtrlCBehavior::Exit
+                        && let Event::Key(KeyEvent {
+                            code: KeyCode::Char('c'),
+                            modifiers,
+                            kind: KeyEventKind::Press,
+                            ..
+                        }) = &evt
+                        && modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        break;
+                    }
 
                     // Handle resize
                     if let Event::Resize(new_width, _) = &evt {
@@ -470,20 +721,29 @@ impl<S: Send + 'static> Application<S> {
                     } else {
                         // Framework handles first (focus routing, tab cycling)
                         self.inline.handle_event(&evt);
-
-                        // Then app handler
-                        let flow = handler(&evt, &mut self.state);
                         self.dirty = true;
 
-                        if matches!(flow, ControlFlow::Exit) {
-                            break;
+                        // Then app handler, if provided
+                        if let Some(ref mut h) = handler {
+                            let flow = h(&evt, &mut self.state);
+                            if matches!(flow, ControlFlow::Exit) {
+                                break;
+                            }
                         }
                     }
                 }
 
-                Some(update) = self.rx.recv() => {
-                    update(&mut self.state);
-                    self.dirty = true;
+                result = self.rx.recv(), if channel_open => {
+                    match result {
+                        Some(update) => {
+                            update(&mut self.state);
+                            self.dirty = true;
+                        }
+                        None => {
+                            // All Handles dropped
+                            channel_open = false;
+                        }
+                    }
                 }
 
                 _ = tick_interval.tick(), if has_active => {
@@ -504,6 +764,7 @@ impl<S: Send + 'static> Application<S> {
             self.rebuild();
         }
         self.flush_to(stdout)?;
+        self.check_commits();
 
         Ok(())
     }
@@ -1014,5 +1275,61 @@ mod tests {
         );
         assert_eq!(app.state().len(), 2);
         assert_eq!(app.state()[0], "d");
+    }
+
+    // --- Context tests ---
+
+    /// Component that reads a String from context into its state.
+    struct CtxReader;
+
+    #[derive(Default)]
+    struct CtxReaderState {
+        value: Option<String>,
+    }
+
+    impl crate::component::Component for CtxReader {
+        type State = CtxReaderState;
+
+        fn render(
+            &self,
+            area: ratatui_core::layout::Rect,
+            buf: &mut ratatui_core::buffer::Buffer,
+            state: &Self::State,
+        ) {
+            if let Some(ref v) = state.value {
+                let text = TextBlock::new().unstyled(v.as_str());
+                text.render(area, buf, &());
+            }
+        }
+
+        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
+            if state.value.is_some() { 1 } else { 0 }
+        }
+
+        fn lifecycle(&self, hooks: &mut crate::hooks::Hooks<Self::State>, _state: &Self::State) {
+            hooks.use_context::<String>(|value, state| {
+                state.value = value.cloned();
+            });
+        }
+    }
+
+    #[test]
+    fn with_context_available_to_components() {
+        let (mut app, _handle) = Application::builder()
+            .state(())
+            .view(|_: &()| {
+                let mut els = Elements::new();
+                els.add(CtxReader);
+                els
+            })
+            .width(30)
+            .with_context("app-context".to_string())
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        app.flush(&mut buf).unwrap();
+        let s = String::from_utf8_lossy(&buf);
+        assert!(s.contains("app-context"));
     }
 }

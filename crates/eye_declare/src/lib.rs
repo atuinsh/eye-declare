@@ -84,6 +84,40 @@
 //! - [`Hooks::use_mount`] — fires once after the component is built
 //! - [`Hooks::use_unmount`] — fires when the component is removed
 //! - [`Hooks::use_autofocus`] — request focus on mount
+//! - [`Hooks::provide_context`] — make a value available to descendants
+//! - [`Hooks::use_context`] — read a value provided by an ancestor
+//!
+//! # Context
+//!
+//! The context system lets ancestor components provide values to their
+//! descendants without prop-drilling. Register root-level contexts via
+//! [`ApplicationBuilder::with_context`], or have components provide
+//! them via [`Hooks::provide_context`] in their lifecycle method.
+//! Descendants read context values with [`Hooks::use_context`].
+//!
+//! This is commonly used with [`Application::run_loop`] to give
+//! components access to an app-domain event channel:
+//!
+//! ```ignore
+//! let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+//! let (mut app, handle) = Application::builder()
+//!     .state(MyState::default())
+//!     .view(my_view)
+//!     .with_context(tx)
+//!     .build()?;
+//!
+//! let h = handle.clone();
+//! tokio::spawn(async move {
+//!     while let Some(event) = rx.recv().await {
+//!         match event {
+//!             AppEvent::Submit(val) => h.update(|s| s.result = val),
+//!             AppEvent::Quit => { h.exit(); break; }
+//!         }
+//!     }
+//! });
+//!
+//! app.run_loop().await?;
+//! ```
 //!
 //! # Feature flags
 //!
@@ -129,13 +163,17 @@ pub mod inline;
 /// The [`Insets`] type for declaring content padding and border chrome.
 pub mod insets;
 
+pub(crate) mod context;
 pub(crate) mod escape;
 pub(crate) mod frame;
 pub(crate) mod node;
 pub(crate) mod renderer;
 pub(crate) mod wrap;
 
-pub use app::{Application, ApplicationBuilder, CommittedElement, ControlFlow, Handle};
+pub use app::{
+    Application, ApplicationBuilder, CommittedElement, ControlFlow, CtrlCBehavior, Handle,
+    KeyboardProtocol,
+};
 pub use children::{AddTo, ChildCollector, ComponentWithSlot, DataHandle, SpliceInto};
 pub use component::{Column, Component, EventResult, HStack, Tracked, VStack};
 pub use components::markdown::{Markdown, MarkdownState};
