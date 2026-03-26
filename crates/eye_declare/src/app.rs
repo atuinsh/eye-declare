@@ -620,9 +620,9 @@ impl<S: Send + 'static> Application<S> {
         // for shell prompts that use cursor manipulation (e.g.,
         // Powerlevel10k's PROMPT_SP or instant prompt) which can
         // overwrite the line immediately above the prompt.
-        let _ = write!(stdout, "\n");
+        let _ = writeln!(stdout);
         for _ in 0..self.extra_newlines_at_exit {
-            let _ = write!(stdout, "\n");
+            let _ = writeln!(stdout);
         }
         let _ = stdout.flush();
     }

@@ -134,6 +134,7 @@ impl Diff {
     }
 
     /// How many rows the frame grew by (0 if it didn't grow).
+    #[cfg(test)]
     pub fn growth(&self) -> u16 {
         self.new_area.height.saturating_sub(self.prev_area.height)
     }

@@ -312,9 +312,12 @@ impl InlineRenderer {
 
         let mut output = Vec::new();
 
-        // If the frame grew, we need to claim more terminal rows
-        let growth = diff.growth();
-        if growth > 0 {
+        // If the frame grew, we may need to claim more terminal rows.
+        // Only emit newlines for rows beyond what we've already claimed —
+        // if the frame previously shrank, some emitted rows are unused
+        // and can absorb part (or all) of the growth without new newlines.
+        let new_rows_needed = new_height.saturating_sub(self.emitted_rows);
+        if new_rows_needed > 0 {
             // Move cursor to the bottom of our current region first
             // (it might be somewhere in the middle from the last write)
             let current_bottom = self.emitted_rows.saturating_sub(1);
@@ -323,12 +326,21 @@ impl InlineRenderer {
                 output.extend_from_slice(format!("\x1b[{}B", down).as_bytes());
             }
             self.cursor.row = current_bottom;
+
+            // Carriage return to column 0 before emitting newlines.
+            // \x1b[nB (CUD) and \n (LF) only move vertically — neither
+            // resets the column. Without this, cursor.col = 0 would
+            // diverge from the terminal's actual column, causing the
+            // first diff cell on the new row to be written at the wrong
+            // position (wherever the cursor was left after the previous
+            // render's escape sequences).
+            output.push(b'\r');
             self.cursor.col = 0;
 
             // Emit newlines to claim new rows
-            output.resize(output.len() + growth as usize, b'\n');
-            self.emitted_rows += growth;
-            self.cursor.row += growth;
+            output.resize(output.len() + new_rows_needed as usize, b'\n');
+            self.emitted_rows += new_rows_needed;
+            self.cursor.row += new_rows_needed;
         }
 
         // Filter out cells in scrollback (unreachable by cursor)
@@ -803,5 +815,85 @@ mod tests {
             "finalize should leave exactly 5 content rows, not {}",
             ir.emitted_rows()
         );
+    }
+
+    #[test]
+    fn shrink_then_grow_does_not_emit_extra_newlines() {
+        // Regression test: toggling a conditional element at the bottom
+        // should not emit extra newlines each cycle, which would cause
+        // the content to "climb" up the viewport.
+        let mut ir = InlineRenderer::new_with_height(40, 24);
+        let id = ir.push(TextBlock);
+        ir.state_mut::<TextBlock>(id)
+            .extend(["line1", "line2", "line3"].map(String::from));
+
+        let _first = ir.render();
+        assert_eq!(ir.emitted_rows(), 3);
+
+        // Shrink: remove last line (simulates conditional disappearing)
+        ir.state_mut::<TextBlock>(id).pop();
+        let _second = ir.render();
+        assert_eq!(
+            ir.emitted_rows(),
+            3,
+            "emitted_rows should not decrease on shrink"
+        );
+
+        // Grow back: add the line again (simulates conditional reappearing)
+        ir.state_mut::<TextBlock>(id).push("line3".to_string());
+        let _third = ir.render();
+        assert_eq!(
+            ir.emitted_rows(),
+            3,
+            "emitted_rows should stay at 3 — we already have the row claimed"
+        );
+
+        // Repeat the cycle to make sure it stays stable
+        ir.state_mut::<TextBlock>(id).pop();
+        let _r4 = ir.render();
+        ir.state_mut::<TextBlock>(id).push("line3".to_string());
+        let _r5 = ir.render();
+        assert_eq!(
+            ir.emitted_rows(),
+            3,
+            "emitted_rows must remain stable across repeated shrink/grow cycles"
+        );
+    }
+
+    #[test]
+    fn growth_emits_cr_before_newlines() {
+        // Regression test: when the frame grows on a subsequent render,
+        // the growth block must emit \r before \n so the terminal column
+        // resets to 0. Without this, the cursor.col tracker diverges from
+        // the real terminal column, causing the first cell on the new row
+        // to be written at the wrong horizontal position.
+        let mut ir = InlineRenderer::new_with_height(40, 24);
+        let id = ir.push(TextBlock);
+        ir.state_mut::<TextBlock>(id).push("hello".to_string());
+
+        let first = ir.render();
+        // First render writes "hello" — cursor advances past col 0
+        let first_str = String::from_utf8_lossy(&first);
+        assert!(first_str.contains("hello"));
+
+        // Grow: add a second line
+        ir.state_mut::<TextBlock>(id).push("world".to_string());
+        let second = ir.render();
+        let _second_str = String::from_utf8_lossy(&second);
+
+        // The growth output must contain \r before the \n that claims
+        // the new row. Find the newline that claims the row — it appears
+        // outside the DEC 2026 sync region, before the escape sequences.
+        // We check that a \r precedes the \n in the raw output.
+        let raw = &second;
+        if let Some(newline_pos) = raw.iter().position(|&b| b == b'\n') {
+            assert!(
+                newline_pos > 0 && raw[newline_pos - 1] == b'\r',
+                "expected \\r immediately before the growth \\n, got byte {:?}",
+                raw.get(newline_pos.wrapping_sub(1))
+            );
+        } else {
+            panic!("expected a newline in the growth output");
+        }
     }
 }
