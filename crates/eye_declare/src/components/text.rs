@@ -20,21 +20,12 @@ use crate::wrap;
 ///     Span(text: "world".into())
 /// }
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Span {
     /// The text content of this span.
     pub text: String,
     /// The style applied to this span's text.
     pub style: Style,
-}
-
-impl Default for Span {
-    fn default() -> Self {
-        Self {
-            text: String::new(),
-            style: Style::default(),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

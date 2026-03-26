@@ -408,6 +408,60 @@ impl InlineRenderer {
         self.cursor.row = self.cursor.row.saturating_sub(committed_height);
     }
 
+    /// Reclaim trailing blank rows after the frame has shrunk.
+    ///
+    /// Call this after a final [`render`](InlineRenderer::render) when
+    /// content has been removed (e.g., clearing a text input before exit).
+    /// Moves the cursor to the last row of actual content, erases
+    /// everything below, and adjusts internal tracking so the terminal
+    /// prompt appears immediately after the content.
+    ///
+    /// Returns escape sequences to write to the terminal. Returns an
+    /// empty Vec if there are no trailing blank rows to reclaim.
+    pub fn finalize(&mut self) -> Vec<u8> {
+        let current_height = self
+            .prev_frame
+            .as_ref()
+            .map(|f| f.area().height)
+            .unwrap_or(0);
+
+        if current_height >= self.emitted_rows || self.emitted_rows == 0 {
+            return Vec::new();
+        }
+
+        // Respect the scrollback boundary: rows above `scrolled_past` are
+        // in terminal scrollback and unreachable by cursor movement.  If we
+        // tried to move there the terminal would clamp us, desyncing our
+        // cursor tracking.  Only erase rows we can actually reach.
+        let scrolled_past = self.emitted_rows.saturating_sub(self.terminal_height);
+        let target_row = current_height.max(scrolled_past);
+
+        if target_row >= self.emitted_rows {
+            return Vec::new();
+        }
+
+        let mut output = Vec::new();
+
+        // Position cursor at the first erasable blank row.
+        if self.cursor.row > target_row {
+            let up = self.cursor.row - target_row;
+            output.extend_from_slice(format!("\x1b[{}A", up).as_bytes());
+        } else if self.cursor.row < target_row {
+            let down = target_row - self.cursor.row;
+            output.extend_from_slice(format!("\x1b[{}B", down).as_bytes());
+        }
+        output.extend_from_slice(b"\r");
+
+        // Erase from cursor to end of screen
+        output.extend_from_slice(b"\x1b[J");
+
+        self.cursor.row = target_row;
+        self.cursor.col = 0;
+        self.emitted_rows = target_row;
+
+        output
+    }
+
     /// Append escape sequences to position the terminal cursor at the
     /// focused component's cursor hint (if any), using relative movement.
     fn append_cursor_position(&mut self, output: &mut Vec<u8>) {
@@ -509,5 +563,68 @@ mod tests {
         assert!(s.contains('\n'));
         // Should contain the new line text
         assert!(s.contains("line2"));
+    }
+
+    #[test]
+    fn finalize_reclaims_trailing_blank_rows() {
+        let mut ir = InlineRenderer::new_with_height(20, 24);
+        let id = ir.push(TextBlock);
+        // Render 3 lines
+        ir.state_mut::<TextBlock>(id)
+            .extend(["a", "b", "c"].map(String::from));
+        let _first = ir.render();
+        assert_eq!(ir.emitted_rows(), 3);
+
+        // Shrink to 1 line
+        ir.state_mut::<TextBlock>(id).truncate(1);
+        let _second = ir.render();
+        // emitted_rows hasn't changed — the rows are still claimed
+        assert_eq!(ir.emitted_rows(), 3);
+
+        // Finalize should reclaim the 2 trailing blank rows
+        let output = ir.finalize();
+        assert!(!output.is_empty());
+        assert_eq!(ir.emitted_rows(), 1);
+        // Should contain erase-to-end-of-screen
+        let s = String::from_utf8_lossy(&output);
+        assert!(s.contains("\x1b[J"));
+    }
+
+    #[test]
+    fn finalize_noop_when_no_trailing_blanks() {
+        let mut ir = InlineRenderer::new_with_height(20, 24);
+        let id = ir.push(TextBlock);
+        ir.state_mut::<TextBlock>(id).push("hello".to_string());
+        let _first = ir.render();
+        assert_eq!(ir.emitted_rows(), 1);
+
+        // No shrinkage — finalize should be a no-op
+        let output = ir.finalize();
+        assert!(output.is_empty());
+        assert_eq!(ir.emitted_rows(), 1);
+    }
+
+    #[test]
+    fn finalize_respects_scrollback_boundary() {
+        // Terminal height 3, content 5 rows → 2 rows in scrollback
+        let mut ir = InlineRenderer::new_with_height(20, 3);
+        let id = ir.push(TextBlock);
+        ir.state_mut::<TextBlock>(id)
+            .extend(["a", "b", "c", "d", "e"].map(String::from));
+        let _first = ir.render();
+        assert_eq!(ir.emitted_rows(), 5);
+
+        // Shrink to 1 row — frame height = 1, but scrolled_past = 2
+        ir.state_mut::<TextBlock>(id).truncate(1);
+        let _second = ir.render();
+
+        // Finalize should only reclaim rows the cursor can reach.
+        // scrolled_past = 5 - 3 = 2, so target_row = max(1, 2) = 2.
+        // Rows 0-1 are in scrollback and untouchable.
+        let output = ir.finalize();
+        assert!(!output.is_empty());
+        assert_eq!(ir.emitted_rows(), 2);
+        let s = String::from_utf8_lossy(&output);
+        assert!(s.contains("\x1b[J"));
     }
 }

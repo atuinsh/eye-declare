@@ -147,7 +147,7 @@ fn generate_component(
     let key_call = key_expr.map(|k| quote! { .key(#k) });
 
     // Add to collector (with or without children)
-    let add_call = match children {
+    match children {
         Some(child_nodes) => {
             let children_code = generate_nodes(child_nodes);
             quote! {
@@ -174,7 +174,5 @@ fn generate_component(
                 }
             }
         }
-    };
-
-    add_call
+    }
 }

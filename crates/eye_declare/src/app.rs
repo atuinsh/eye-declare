@@ -303,6 +303,14 @@ impl<S: Send + 'static> Application<S> {
 
         let result = self.event_loop(&mut handler, &mut stdout).await;
 
+        // Reclaim trailing blank rows so the shell prompt appears
+        // tight against the content (e.g., after removing an input box).
+        let finalize_bytes = self.inline.finalize();
+        if !finalize_bytes.is_empty() {
+            stdout.write_all(&finalize_bytes)?;
+            stdout.flush()?;
+        }
+
         // Guard handles disable_raw_mode + cursor restore on drop,
         // but do it explicitly here for the clean newline.
         drop(_guard);
@@ -408,8 +416,13 @@ impl<S: Send + 'static> Application<S> {
             self.check_commits();
         }
 
-        // Final flush
+        // Final flush + reclaim trailing blank rows
         self.flush_to(writer)?;
+        let finalize_bytes = self.inline.finalize();
+        if !finalize_bytes.is_empty() {
+            writer.write_all(&finalize_bytes)?;
+            writer.flush()?;
+        }
 
         Ok(())
     }
