@@ -370,7 +370,7 @@ impl Renderer {
             None => 0, // No current focus → focus first focusable
         };
 
-        self.focused = Some(focusable[next_idx]);
+        self.set_focus(focusable[next_idx]);
         true
     }
 
@@ -790,8 +790,12 @@ impl Renderer {
                 // focusable node in the parent scope (or the whole tree).
                 if self.focused.is_none() {
                     let parent_scope = self.nodes[id].parent.and_then(|p| self.find_scope_for(p));
-                    let fallback = match parent_scope {
-                        Some(ps) => self.focusable_nodes_in_scope(ps),
+                    let fallback: Vec<_> = match parent_scope {
+                        Some(ps) => self
+                            .focusable_nodes_in_scope(ps)
+                            .into_iter()
+                            .filter(|&n| !self.is_in_subtree(n, id))
+                            .collect(),
                         None => self
                             .focusable_nodes()
                             .into_iter()
@@ -1985,6 +1989,28 @@ mod tests {
         assert_eq!(r.focus(), Some(f_in));
 
         // Remove scope — should restore to f_outside
+        r.remove(scope);
+        assert_eq!(r.focus(), Some(f_outside));
+    }
+
+    #[test]
+    fn tab_into_scope_saves_pre_scope_focus() {
+        let mut r = Renderer::new(20);
+        let f_outside = r.push(FocusableItem);
+
+        let scope = r.push(ScopeContainer);
+        r.apply_lifecycle(scope);
+        let f_in = r.append_child(scope, FocusableItem);
+
+        // Start focused outside
+        r.set_focus(f_outside);
+
+        // Tab cycles globally (no scope on f_outside) and lands on f_in
+        r.handle_event(&tab_event());
+        assert_eq!(r.focus(), Some(f_in));
+
+        // Remove scope — should restore to f_outside since set_focus
+        // was called internally by cycle_focus
         r.remove(scope);
         assert_eq!(r.focus(), Some(f_outside));
     }
