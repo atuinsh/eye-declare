@@ -133,7 +133,20 @@ impl Renderer {
     }
 
     /// Set which component has focus for event routing.
+    ///
+    /// If the target node is inside a focus scope and focus is currently
+    /// outside that scope, the current focus is saved so it can be
+    /// restored when the scope is removed.
     pub fn set_focus(&mut self, id: NodeId) {
+        if let Some(scope_id) = self.find_scope_for(id) {
+            // Only save if the current focus is outside this scope
+            let current_outside = self
+                .focused
+                .is_none_or(|f| !self.is_in_subtree(f, scope_id));
+            if current_outside {
+                self.saved_focus.entry(scope_id).or_insert(self.focused);
+            }
+        }
         self.focused = Some(id);
     }
 
@@ -284,13 +297,17 @@ impl Renderer {
         if node.frozen {
             return;
         }
-        // Stop at nested scope boundaries (but not the scope itself)
-        if id != scope_id && node.focus_scope {
-            return;
-        }
+        // Check focusability before the scope boundary check so that
+        // a node which is both focusable and a scope boundary can still
+        // participate in its parent scope's Tab cycle.
         let state = node.state.inner_as_any();
         if node.component.is_focusable_erased(state) {
             result.push(id);
+        }
+        // Stop descent at nested scope boundaries (but not the scope itself).
+        // The node itself was already considered above.
+        if id != scope_id && node.focus_scope {
+            return;
         }
         for &child in &node.children {
             self.collect_focusable_scoped(child, scope_id, result);
@@ -758,6 +775,15 @@ impl Renderer {
                 self.focused = restored.filter(|&r| {
                     // Validate: the saved node must still be live and
                     // must not be part of this subtree being removed.
+                    //
+                    // Note: is_live checks slot occupancy, not identity.
+                    // If the saved NodeId was freed and its arena slot
+                    // recycled for a different node, this will incorrectly
+                    // match. A generational NodeId would close this gap
+                    // but is a broader arena change. In practice the risk
+                    // is low: scopes are typically removed in the same
+                    // rebuild pass that frees their saved target, and
+                    // arena recycling across rebuilds is rare.
                     self.nodes.is_live(r) && !self.is_in_subtree(r, id)
                 });
                 // If the saved target is gone, fall back to the first
@@ -1942,6 +1968,25 @@ mod tests {
         // And back in
         r.set_focus(f_in);
         assert_eq!(r.focus(), Some(f_in));
+    }
+
+    #[test]
+    fn set_focus_into_scope_saves_pre_scope_focus() {
+        let mut r = Renderer::new(20);
+        let f_outside = r.push(FocusableItem);
+        r.set_focus(f_outside);
+
+        let scope = r.push(ScopeContainer);
+        r.apply_lifecycle(scope);
+        let f_in = r.append_child(scope, FocusableItem);
+
+        // Programmatic set_focus into scope should save pre-scope focus
+        r.set_focus(f_in);
+        assert_eq!(r.focus(), Some(f_in));
+
+        // Remove scope — should restore to f_outside
+        r.remove(scope);
+        assert_eq!(r.focus(), Some(f_outside));
     }
 
     // --- Capture phase tests ---
