@@ -17,6 +17,7 @@ pub(crate) type ConsumerFn<S> = Box<dyn FnOnce(&ContextMap, &mut Tracked<S>) + S
 pub(crate) type Decomposed<S> = (
     Vec<Effect>,
     bool,
+    bool,
     Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
     Vec<ConsumerFn<S>>,
 );
@@ -37,6 +38,7 @@ pub(crate) type Decomposed<S> = (
 /// | [`use_mount`](Hooks::use_mount) | Once, after the component is first built |
 /// | [`use_unmount`](Hooks::use_unmount) | Once, when the component is removed |
 /// | [`use_autofocus`](Hooks::use_autofocus) | Requests focus when the component mounts |
+/// | [`use_focus_scope`](Hooks::use_focus_scope) | Creates a focus scope boundary for Tab cycling |
 /// | [`provide_context`](Hooks::provide_context) | Makes a value available to descendants |
 /// | [`use_context`](Hooks::use_context) | Reads a value provided by an ancestor |
 ///
@@ -54,6 +56,7 @@ pub(crate) type Decomposed<S> = (
 pub struct Hooks<S: 'static> {
     effects: Vec<Effect>,
     autofocus: bool,
+    focus_scope: bool,
     provided: Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
     consumers: Vec<ConsumerFn<S>>,
     _marker: PhantomData<S>,
@@ -64,6 +67,7 @@ impl<S: Send + Sync + 'static> Hooks<S> {
         Self {
             effects: Vec::new(),
             autofocus: false,
+            focus_scope: false,
             provided: Vec::new(),
             consumers: Vec::new(),
             _marker: PhantomData,
@@ -128,6 +132,16 @@ impl<S: Send + Sync + 'static> Hooks<S> {
         self.autofocus = true;
     }
 
+    /// Mark this node as a focus scope boundary.
+    ///
+    /// Tab/Shift-Tab cycling is confined to focusable descendants
+    /// within this scope. Scopes nest — the deepest enclosing scope
+    /// wins. When this node is removed from the tree, focus is
+    /// restored to whatever was focused before the scope captured it.
+    pub fn use_focus_scope(&mut self) {
+        self.focus_scope = true;
+    }
+
     /// Provide a context value to all descendant components.
     ///
     /// The value is available during this reconciliation pass to any
@@ -182,6 +196,6 @@ impl<S: Send + Sync + 'static> Hooks<S> {
 
     /// Consume the hooks, returning effects, provided contexts, and consumers.
     pub(crate) fn decompose(self) -> Decomposed<S> {
-        (self.effects, self.autofocus, self.provided, self.consumers)
+        (self.effects, self.autofocus, self.focus_scope, self.provided, self.consumers)
     }
 }

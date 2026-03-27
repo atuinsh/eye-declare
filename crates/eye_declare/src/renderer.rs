@@ -30,6 +30,10 @@ pub struct Renderer {
     /// Context values available during reconciliation. Providers push
     /// values before their subtree is processed and pop them after.
     context: ContextMap,
+    /// Saved focus per focus scope node. When autofocus moves focus into
+    /// a scope, the previous focus is saved here so it can be restored
+    /// when the scope is removed.
+    saved_focus: HashMap<NodeId, Option<NodeId>>,
 }
 
 impl Renderer {
@@ -48,6 +52,7 @@ impl Renderer {
             cursor_hint: None,
             effects: HashMap::new(),
             context: ContextMap::new(),
+            saved_focus: HashMap::new(),
         }
     }
 
@@ -254,13 +259,78 @@ impl Renderer {
         }
     }
 
+    /// Find the deepest focus scope ancestor of a node (including self).
+    fn find_scope_for(&self, node_id: NodeId) -> Option<NodeId> {
+        let mut current = Some(node_id);
+        while let Some(id) = current {
+            if self.nodes[id].focus_scope {
+                return Some(id);
+            }
+            current = self.nodes[id].parent;
+        }
+        None
+    }
+
+    /// Collect focusable nodes within a focus scope's subtree (DFS),
+    /// stopping at nested scope boundaries.
+    fn focusable_nodes_in_scope(&self, scope_id: NodeId) -> Vec<NodeId> {
+        let mut result = Vec::new();
+        self.collect_focusable_scoped(scope_id, scope_id, &mut result);
+        result
+    }
+
+    fn collect_focusable_scoped(
+        &self,
+        id: NodeId,
+        scope_id: NodeId,
+        result: &mut Vec<NodeId>,
+    ) {
+        let node = &self.nodes[id];
+        if node.frozen {
+            return;
+        }
+        // Stop at nested scope boundaries (but not the scope itself)
+        if id != scope_id && node.focus_scope {
+            return;
+        }
+        let state = node.state.inner_as_any();
+        if node.component.is_focusable_erased(state) {
+            result.push(id);
+        }
+        for &child in &node.children {
+            self.collect_focusable_scoped(child, scope_id, result);
+        }
+    }
+
+    /// Check whether `node_id` is within the subtree rooted at `subtree_root`.
+    fn is_in_subtree(&self, node_id: NodeId, subtree_root: NodeId) -> bool {
+        let mut current = Some(node_id);
+        while let Some(id) = current {
+            if id == subtree_root {
+                return true;
+            }
+            current = self.nodes[id].parent;
+        }
+        false
+    }
+
     /// Cycle focus to the next (or previous) focusable component.
+    ///
+    /// When focus is inside a focus scope, cycling is confined to that
+    /// scope's subtree (stopping at nested scope boundaries). When no
+    /// scope encloses the focused node, cycling covers the entire tree.
     ///
     /// Returns `true` if focus actually moved to a different component.
     /// Returns `false` if there are no focusable components or only one
     /// (so Tab/BackTab should fall through to normal event handling).
     fn cycle_focus(&mut self, reverse: bool) -> bool {
-        let focusable = self.focusable_nodes();
+        let scope = self.focused.and_then(|f| self.find_scope_for(f));
+
+        let focusable = match scope {
+            Some(scope_id) => self.focusable_nodes_in_scope(scope_id),
+            None => self.focusable_nodes(),
+        };
+
         if focusable.is_empty() {
             return false;
         }
@@ -474,6 +544,12 @@ impl Renderer {
                 .component
                 .is_focusable_erased(node.state.inner_as_any())
             {
+                // If this node is inside a focus scope, save the current
+                // focus so it can be restored when the scope is removed.
+                // First save per scope wins (entry().or_insert).
+                if let Some(scope_id) = self.find_scope_for(id) {
+                    self.saved_focus.entry(scope_id).or_insert(self.focused);
+                }
                 self.focused = Some(id);
             }
         }
@@ -670,12 +746,48 @@ impl Renderer {
             self.effects.insert(id, output.effects);
         }
         self.nodes[id].autofocus = output.autofocus;
+        self.nodes[id].focus_scope = output.focus_scope;
         output.provided
     }
 
     /// Tombstone a node and all its descendants without touching the
     /// parent's children list (caller is responsible for that).
     fn tombstone_subtree(&mut self, id: NodeId) {
+        // Focus scope restoration: if this node is a scope boundary and
+        // focus is currently inside it, restore the saved pre-scope focus.
+        // This must happen before recursing, since children will be freed.
+        if self.nodes[id].focus_scope {
+            let focus_inside = self
+                .focused
+                .is_some_and(|f| self.is_in_subtree(f, id));
+            if focus_inside {
+                let restored = self.saved_focus.remove(&id).flatten();
+                self.focused = restored.filter(|&r| {
+                    // Validate: the saved node must still be live and
+                    // must not be part of this subtree being removed.
+                    self.nodes.is_live(r) && !self.is_in_subtree(r, id)
+                });
+                // If the saved target is gone, fall back to the first
+                // focusable node in the parent scope (or the whole tree).
+                if self.focused.is_none() {
+                    let parent_scope = self.nodes[id]
+                        .parent
+                        .and_then(|p| self.find_scope_for(p));
+                    let fallback = match parent_scope {
+                        Some(ps) => self.focusable_nodes_in_scope(ps),
+                        None => self
+                            .focusable_nodes()
+                            .into_iter()
+                            .filter(|&n| !self.is_in_subtree(n, id))
+                            .collect(),
+                    };
+                    self.focused = fallback.into_iter().next();
+                }
+            } else {
+                self.saved_focus.remove(&id);
+            }
+        }
+
         // Children unmount first (bottom-up), then parent
         let children = std::mem::take(&mut self.nodes[id].children);
         for child_id in children {
@@ -686,6 +798,7 @@ impl Renderer {
         if self.focused == Some(id) {
             self.focused = None;
         }
+        self.saved_focus.remove(&id);
         self.nodes.free(id);
     }
 
@@ -1572,6 +1685,272 @@ mod tests {
         let result = r.handle_event(&tab_event());
         assert_eq!(r.focus(), Some(f1));
         assert_eq!(result, EventResult::Ignored);
+    }
+
+    // --- Focus scope tests ---
+
+    /// A container that declares a focus scope via lifecycle hook.
+    struct ScopeContainer;
+
+    impl Component for ScopeContainer {
+        type State = ();
+
+        fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &()) {}
+
+        fn desired_height(&self, _width: u16, _state: &()) -> u16 {
+            0
+        }
+
+        fn initial_state(&self) -> Option<()> {
+            Some(())
+        }
+
+        fn lifecycle(&self, hooks: &mut Hooks<()>, _state: &()) {
+            hooks.use_focus_scope();
+        }
+    }
+
+    /// A focusable component that requests autofocus on mount.
+    struct AutofocusItem;
+
+    impl Component for AutofocusItem {
+        type State = String;
+
+        fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
+            let line = ratatui_core::text::Line::raw(state.as_str());
+            ratatui_core::widgets::Widget::render(Paragraph::new(line), area, buf);
+        }
+
+        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
+            if state.is_empty() { 0 } else { 1 }
+        }
+
+        fn is_focusable(&self, _state: &Self::State) -> bool {
+            true
+        }
+
+        fn initial_state(&self) -> Option<String> {
+            Some("autofocus-item".to_string())
+        }
+
+        fn lifecycle(&self, hooks: &mut Hooks<Self::State>, _state: &Self::State) {
+            hooks.use_autofocus();
+        }
+    }
+
+    #[test]
+    fn tab_cycles_within_scope_only() {
+        let mut r = Renderer::new(20);
+        let f_outside = r.push(FocusableItem);
+
+        // Create a scope container with two focusable children
+        let scope = r.push(ScopeContainer);
+        r.apply_lifecycle(scope); // sets focus_scope flag
+        let f1 = r.append_child(scope, FocusableItem);
+        let f2 = r.append_child(scope, FocusableItem);
+
+        // Focus the first item inside the scope
+        r.set_focus(f1);
+
+        // Tab should cycle within scope: f1 → f2
+        r.handle_event(&tab_event());
+        assert_eq!(r.focus(), Some(f2));
+
+        // Tab again: f2 → f1 (wraps within scope)
+        r.handle_event(&tab_event());
+        assert_eq!(r.focus(), Some(f1));
+
+        // f_outside should never be reached
+        let _ = f_outside;
+    }
+
+    #[test]
+    fn tab_in_scope_with_single_focusable_falls_through() {
+        let mut r = Renderer::new(20);
+
+        let scope = r.push(ScopeContainer);
+        r.apply_lifecycle(scope);
+        let f1 = r.append_child(scope, FocusableItem);
+
+        r.set_focus(f1);
+
+        // Only one focusable in scope — Tab should fall through
+        // to event handlers (not consumed by cycling)
+        let result = r.handle_event(&tab_event());
+        assert_eq!(r.focus(), Some(f1));
+        assert_eq!(result, EventResult::Ignored);
+    }
+
+    #[test]
+    fn backtab_cycles_within_scope() {
+        let mut r = Renderer::new(20);
+        let _f_outside = r.push(FocusableItem);
+
+        let scope = r.push(ScopeContainer);
+        r.apply_lifecycle(scope);
+        let f1 = r.append_child(scope, FocusableItem);
+        let f2 = r.append_child(scope, FocusableItem);
+        let f3 = r.append_child(scope, FocusableItem);
+
+        r.set_focus(f1);
+
+        // BackTab from first → wraps to last in scope
+        r.handle_event(&backtab_event());
+        assert_eq!(r.focus(), Some(f3));
+
+        // BackTab → f2
+        r.handle_event(&backtab_event());
+        assert_eq!(r.focus(), Some(f2));
+    }
+
+    #[test]
+    fn removing_scope_restores_previous_focus() {
+        let mut r = Renderer::new(20);
+        let f_outside = r.push(FocusableItem);
+        r.set_focus(f_outside);
+
+        // Build scope with an autofocus child (this saves pre-scope focus)
+        let scope = r.push(ScopeContainer);
+        let _f_in = r.append_child(scope, AutofocusItem);
+
+        // Simulate mount: apply lifecycle and fire mount effects
+        let provided = r.apply_lifecycle(scope);
+        let saved = r.push_context(provided);
+        let provided_child = r.apply_lifecycle(_f_in);
+        r.fire_mount(_f_in);
+        let saved2 = r.push_context(provided_child);
+        r.pop_context(saved2);
+        r.pop_context(saved);
+
+        // Autofocus should have moved focus into the scope
+        assert_eq!(r.focus(), Some(_f_in));
+
+        // Remove the scope
+        r.remove(scope);
+
+        // Focus should be restored to f_outside
+        assert_eq!(r.focus(), Some(f_outside));
+    }
+
+    #[test]
+    fn nested_scopes_inner_removed_restores_to_outer() {
+        let mut r = Renderer::new(20);
+        let f_outside = r.push(FocusableItem);
+        r.set_focus(f_outside);
+
+        // Outer scope with autofocus child
+        let outer_scope = r.push(ScopeContainer);
+        let f_outer = r.append_child(outer_scope, AutofocusItem);
+
+        let provided = r.apply_lifecycle(outer_scope);
+        let saved = r.push_context(provided);
+        let provided_child = r.apply_lifecycle(f_outer);
+        r.fire_mount(f_outer);
+        let saved2 = r.push_context(provided_child);
+        r.pop_context(saved2);
+
+        assert_eq!(r.focus(), Some(f_outer));
+
+        // Inner scope with autofocus child
+        let inner_scope = r.append_child(outer_scope, ScopeContainer);
+        let f_inner = r.append_child(inner_scope, AutofocusItem);
+
+        let provided_inner_scope = r.apply_lifecycle(inner_scope);
+        let saved3 = r.push_context(provided_inner_scope);
+        let provided_inner_child = r.apply_lifecycle(f_inner);
+        r.fire_mount(f_inner);
+        let saved4 = r.push_context(provided_inner_child);
+        r.pop_context(saved4);
+        r.pop_context(saved3);
+        r.pop_context(saved);
+
+        assert_eq!(r.focus(), Some(f_inner));
+
+        // Remove inner scope → focus should return to f_outer
+        r.remove(inner_scope);
+        assert_eq!(r.focus(), Some(f_outer));
+
+        // Remove outer scope → focus should return to f_outside
+        r.remove(outer_scope);
+        assert_eq!(r.focus(), Some(f_outside));
+    }
+
+    #[test]
+    fn scope_removed_with_invalid_saved_focus_falls_back() {
+        let mut r = Renderer::new(20);
+        let f0 = r.push(FocusableItem);
+        let f1 = r.push(FocusableItem);
+        r.set_focus(f1);
+
+        // Build scope with autofocus child (saves f1 as pre-scope focus)
+        let scope = r.push(ScopeContainer);
+        let _f_in = r.append_child(scope, AutofocusItem);
+
+        let provided = r.apply_lifecycle(scope);
+        let saved = r.push_context(provided);
+        let provided_child = r.apply_lifecycle(_f_in);
+        r.fire_mount(_f_in);
+        let saved2 = r.push_context(provided_child);
+        r.pop_context(saved2);
+        r.pop_context(saved);
+
+        assert_eq!(r.focus(), Some(_f_in));
+
+        // Remove the saved focus target (f1) while scope is open
+        r.remove(f1);
+
+        // Remove the scope — saved focus is invalid, should fall back
+        // to the first focusable in the parent scope (f0)
+        r.remove(scope);
+        assert_eq!(r.focus(), Some(f0));
+    }
+
+    #[test]
+    fn scope_removed_with_no_remaining_focusable_clears() {
+        let mut r = Renderer::new(20);
+        let f_outside = r.push(FocusableItem);
+        r.set_focus(f_outside);
+
+        // Build scope with autofocus child
+        let scope = r.push(ScopeContainer);
+        let _f_in = r.append_child(scope, AutofocusItem);
+
+        let provided = r.apply_lifecycle(scope);
+        let saved = r.push_context(provided);
+        let provided_child = r.apply_lifecycle(_f_in);
+        r.fire_mount(_f_in);
+        let saved2 = r.push_context(provided_child);
+        r.pop_context(saved2);
+        r.pop_context(saved);
+
+        // Remove all outside focusable nodes
+        r.remove(f_outside);
+
+        // Remove the scope — nothing to fall back to
+        r.remove(scope);
+        assert_eq!(r.focus(), None);
+    }
+
+    #[test]
+    fn programmatic_set_focus_crosses_scope_boundaries() {
+        let mut r = Renderer::new(20);
+        let f_outside = r.push(FocusableItem);
+
+        let scope = r.push(ScopeContainer);
+        r.apply_lifecycle(scope);
+        let f_in = r.append_child(scope, FocusableItem);
+
+        // Focus inside scope
+        r.set_focus(f_in);
+        assert_eq!(r.focus(), Some(f_in));
+
+        // Programmatic set_focus crosses scope boundary
+        r.set_focus(f_outside);
+        assert_eq!(r.focus(), Some(f_outside));
+
+        // And back in
+        r.set_focus(f_in);
+        assert_eq!(r.focus(), Some(f_in));
     }
 
     // --- Capture phase tests ---
