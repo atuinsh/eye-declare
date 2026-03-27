@@ -789,20 +789,15 @@ impl Renderer {
                 // If the saved target is gone, fall back to the first
                 // focusable node in the parent scope (or the whole tree).
                 if self.focused.is_none() {
-                    let parent_scope = self.nodes[id].parent.and_then(|p| self.find_scope_for(p));
-                    let fallback: Vec<_> = match parent_scope {
-                        Some(ps) => self
-                            .focusable_nodes_in_scope(ps)
-                            .into_iter()
-                            .filter(|&n| !self.is_in_subtree(n, id))
-                            .collect(),
-                        None => self
-                            .focusable_nodes()
-                            .into_iter()
-                            .filter(|&n| !self.is_in_subtree(n, id))
-                            .collect(),
+                    let parent_scope =
+                        self.nodes[id].parent.and_then(|p| self.find_scope_for(p));
+                    let candidates = match parent_scope {
+                        Some(ps) => self.focusable_nodes_in_scope(ps),
+                        None => self.focusable_nodes(),
                     };
-                    self.focused = fallback.into_iter().next();
+                    self.focused = candidates
+                        .into_iter()
+                        .find(|&n| !self.is_in_subtree(n, id));
                 }
             } else {
                 self.saved_focus.remove(&id);
