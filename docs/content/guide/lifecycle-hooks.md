@@ -76,6 +76,16 @@ hooks.use_autofocus();
 
 If multiple components mount with autofocus in the same rebuild, the last one wins. This is typically used for input fields that should be focused on creation.
 
+### use_focus_scope
+
+Marks this component as a focus scope boundary. Tab/Shift-Tab cycling is confined to focusable descendants within the scope:
+
+```rust
+hooks.use_focus_scope();
+```
+
+Scopes nest — an inner scope takes precedence over an outer one. When the scope is removed, focus returns to wherever it was before the scope captured it. See [Events and Focus](events-and-focus.md#focus-scopes) for full details.
+
 ### provide_context
 
 Makes a typed value available to all descendant components. See [Context](context.md) for details:
@@ -197,5 +207,6 @@ impl Component for StatusLog {
 | `use_mount(handler)` | Once, after first build | `&mut State` |
 | `use_unmount(handler)` | Once, when component removed | `&mut State` |
 | `use_autofocus()` | Requests focus on mount | — |
+| `use_focus_scope()` | Creates a focus scope boundary | — |
 | `provide_context(value)` | Makes value available to descendants | — |
 | `use_context::<T>(handler)` | After lifecycle returns | `Option<&T>, &mut Tracked<S>` |
