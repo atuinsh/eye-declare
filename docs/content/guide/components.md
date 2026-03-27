@@ -1,0 +1,247 @@
+---
+title: Components
+description: Building custom components with the Component trait
+---
+
+# Components
+
+Components are the building blocks of an eye-declare UI. Every piece of your interface — from a single line of styled text to a complex multi-part layout — is a component.
+
+## The Component trait
+
+At minimum, a component implements `render()` and `desired_height()`:
+
+```rust
+use eye_declare::Component;
+use ratatui_core::{buffer::Buffer, layout::Rect, style::Style, widgets::Widget};
+use ratatui_widgets::paragraph::Paragraph;
+
+#[derive(Default)]
+struct Badge {
+    pub label: String,
+    pub color: Color,
+}
+
+impl Component for Badge {
+    type State = (); // no internal state needed
+
+    fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) {
+        let style = Style::default().fg(self.color);
+        Paragraph::new(Span::styled(&self.label, style)).render(area, buf);
+    }
+
+    fn desired_height(&self, _width: u16, _state: &()) -> u16 {
+        1
+    }
+}
+```
+
+Then use it:
+
+```rust
+element! {
+    Badge(label: "Online".into(), color: Color::Green)
+}
+```
+
+## Props vs. State
+
+eye-declare separates data into two categories:
+
+**Props** are fields on `&self` — immutable data set by the parent:
+
+```rust
+struct StatusBadge {
+    pub label: String,    // prop
+    pub color: Color,     // prop
+}
+```
+
+**State** is the associated `type State` — mutable data managed by the framework:
+
+```rust
+#[derive(Default)]
+struct CounterState {
+    count: u32,
+}
+
+struct Counter;
+
+impl Component for Counter {
+    type State = CounterState;
+    // ...
+}
+```
+
+State is automatically wrapped in `Tracked<S>`, which detects mutations and marks the component dirty for re-rendering. You never need to manage this manually — mutations through event handlers and lifecycle hooks trigger it automatically.
+
+## Initial state
+
+By default, state is initialized with `State::default()`. Override `initial_state()` to customize:
+
+```rust
+impl Component for Timer {
+    type State = TimerState;
+
+    fn initial_state(&self) -> Option<TimerState> {
+        Some(TimerState {
+            started_at: Instant::now(),
+            elapsed: 0,
+        })
+    }
+
+    // ...
+}
+```
+
+## Desired height
+
+Every component must declare how tall it wants to be. The framework calls `desired_height()` during layout to allocate vertical space:
+
+```rust
+fn desired_height(&self, width: u16, state: &Self::State) -> u16 {
+    // A paragraph that wraps
+    let lines = wrap_text(&self.text, width);
+    lines.len() as u16
+}
+```
+
+The `width` parameter is the available width — use it to calculate wrapped heights. For container components (those with children), return `0` — the framework computes the total height from the children.
+
+## Rendering
+
+`render()` receives a `Rect` (the allocated area) and a `Buffer` (the drawing surface). Use any Ratatui `Widget` to draw:
+
+```rust
+fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
+    let text = format!("Count: {}", state.count);
+    Paragraph::new(text).render(area, buf);
+}
+```
+
+The framework only calls `render()` when the component is dirty (state changed) or the layout changed. You don't need to optimize for no-op renders.
+
+## Composite components
+
+Components can generate their own child trees by overriding `children()`:
+
+```rust
+impl Component for Card {
+    type State = ();
+
+    fn children(&self, _state: &(), slot: Option<Elements>) -> Option<Elements> {
+        let mut els = Elements::new();
+
+        // Add a header
+        els.add(TextBlock::new().line(&self.title, heading_style()));
+
+        // Include externally-provided children
+        if let Some(children) = slot {
+            els.group(children);
+        }
+
+        Some(els)
+    }
+
+    fn content_inset(&self, _state: &()) -> Insets {
+        Insets::all(1) // 1-cell border on all sides
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) {
+        // Draw border chrome in the full area
+        // Children render inside the inset area automatically
+    }
+
+    fn desired_height(&self, _: u16, _: &()) -> u16 {
+        0 // containers return 0; framework sums children
+    }
+}
+```
+
+The `slot` parameter carries children provided externally (from the `element!` macro's brace syntax):
+
+```rust
+element! {
+    Card(title: "My Card".into()) {
+        "These children appear in the slot"
+        Spinner(label: "Loading...")
+    }
+}
+```
+
+### Three composition patterns
+
+1. **Pass through** (default) — `children()` returns `slot` unchanged. Layout containers like `VStack` and `HStack` use this.
+
+2. **Generate own tree** — `children()` ignores `slot` and returns a custom `Elements`. The built-in `Spinner` does this: it generates an internal layout of animation frame + label.
+
+3. **Wrap slot** — `children()` incorporates `slot` into a larger tree. A `Card` component wraps slot children with a header and border.
+
+## Accepting slot children
+
+For your component to accept children in `element!`, it needs to implement `ChildCollector`. Use the `impl_slot_children!` macro:
+
+```rust
+#[derive(Default)]
+struct Panel {
+    pub title: String,
+}
+
+impl Component for Panel {
+    type State = ();
+
+    fn children(&self, _state: &(), slot: Option<Elements>) -> Option<Elements> {
+        slot // pass children through
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) { /* ... */ }
+    fn desired_height(&self, _: u16, _: &()) -> u16 { 0 }
+}
+
+impl_slot_children!(Panel);
+
+// Now this works:
+element! {
+    Panel(title: "Settings".into()) {
+        "Option 1"
+        "Option 2"
+    }
+}
+```
+
+Without `impl_slot_children!`, attempting to use brace children on your component will produce a compile error.
+
+## Content insets
+
+Components that draw border chrome (boxes, padding, decorations) should declare `content_inset()` so the framework knows where to place children:
+
+```rust
+fn content_inset(&self, _state: &()) -> Insets {
+    Insets::all(1) // 1 cell on every side
+}
+```
+
+The component's `render()` receives the full area (including the border), while children are laid out inside the inset area. Available constructors:
+
+```rust
+Insets::ZERO                          // no insets (default)
+Insets::all(1)                        // 1 cell on all sides
+Insets::symmetric(1, 2)               // top/bottom 1, left/right 2
+Insets::new().top(2).left(1).right(1) // builder style
+```
+
+## Full Component trait reference
+
+| Method | Required | Default | Purpose |
+|--------|----------|---------|---------|
+| `render()` | Yes | — | Draw into the allocated area |
+| `desired_height()` | Yes | — | Declare vertical space needs |
+| `handle_event()` | No | `Ignored` | Handle keyboard/mouse events |
+| `is_focusable()` | No | `false` | Participate in Tab cycling |
+| `cursor_position()` | No | `None` | Position terminal cursor when focused |
+| `initial_state()` | No | `State::default()` | Custom initial state |
+| `content_inset()` | No | `Insets::ZERO` | Border/padding for children |
+| `layout()` | No | `Vertical` | Child layout direction |
+| `width_constraint()` | No | `Fill` | Width in horizontal containers |
+| `lifecycle()` | No | no-op | Declare effects (intervals, mount, etc.) |
+| `children()` | No | `slot` | Generate or modify child tree |

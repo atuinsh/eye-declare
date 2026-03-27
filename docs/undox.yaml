@@ -1,0 +1,31 @@
+site:
+  name: eye-declare
+  description: A declarative inline TUI rendering library for Rust
+  url: https://eye-declare.dev
+
+sources:
+  - name: docs
+    url_prefix: /
+    local:
+      path: content
+    nav:
+      - section: Getting Started
+        items:
+          - getting-started/introduction.md
+          - getting-started/installation.md
+          - getting-started/quick-start.md
+      - section: Guide
+        items:
+          - guide/element-macro.md
+          - guide/components.md
+          - guide/layout.md
+          - guide/lifecycle-hooks.md
+          - guide/events-and-focus.md
+          - guide/context.md
+          - guide/reconciliation.md
+          - guide/application.md
+      - section: Reference
+        items:
+          - reference/built-in-components.md
+          - reference/terminal-options.md
+          - reference/imperative-api.md

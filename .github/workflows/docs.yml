@@ -1,0 +1,57 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache undox binary
+        id: cache-undox
+        uses: actions/cache@v4
+        with:
+          path: .undox/bin
+          key: undox-0.1.8-linux-x86_64
+
+      - name: Install undox
+        if: steps.cache-undox.outputs.cache-hit != 'true'
+        run: ./docs/scripts/install-undox.sh 0.1.8
+
+      - name: Build docs
+        run: |
+          export PATH="$PWD/.undox/bin:$PATH"
+          cd docs
+          undox build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

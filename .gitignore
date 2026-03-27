@@ -1,5 +1,8 @@
 /target
 .claude/
+.undox/
+docs/_site/
+docs/.undox/
 
 # Simple Task Master - User tasks are git-ignored
 .simple-task-master/tasks/
