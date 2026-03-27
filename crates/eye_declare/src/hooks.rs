@@ -196,6 +196,12 @@ impl<S: Send + Sync + 'static> Hooks<S> {
 
     /// Consume the hooks, returning effects, provided contexts, and consumers.
     pub(crate) fn decompose(self) -> Decomposed<S> {
-        (self.effects, self.autofocus, self.focus_scope, self.provided, self.consumers)
+        (
+            self.effects,
+            self.autofocus,
+            self.focus_scope,
+            self.provided,
+            self.consumers,
+        )
     }
 }

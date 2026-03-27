@@ -279,12 +279,7 @@ impl Renderer {
         result
     }
 
-    fn collect_focusable_scoped(
-        &self,
-        id: NodeId,
-        scope_id: NodeId,
-        result: &mut Vec<NodeId>,
-    ) {
+    fn collect_focusable_scoped(&self, id: NodeId, scope_id: NodeId, result: &mut Vec<NodeId>) {
         let node = &self.nodes[id];
         if node.frozen {
             return;
@@ -757,9 +752,7 @@ impl Renderer {
         // focus is currently inside it, restore the saved pre-scope focus.
         // This must happen before recursing, since children will be freed.
         if self.nodes[id].focus_scope {
-            let focus_inside = self
-                .focused
-                .is_some_and(|f| self.is_in_subtree(f, id));
+            let focus_inside = self.focused.is_some_and(|f| self.is_in_subtree(f, id));
             if focus_inside {
                 let restored = self.saved_focus.remove(&id).flatten();
                 self.focused = restored.filter(|&r| {
@@ -770,9 +763,7 @@ impl Renderer {
                 // If the saved target is gone, fall back to the first
                 // focusable node in the parent scope (or the whole tree).
                 if self.focused.is_none() {
-                    let parent_scope = self.nodes[id]
-                        .parent
-                        .and_then(|p| self.find_scope_for(p));
+                    let parent_scope = self.nodes[id].parent.and_then(|p| self.find_scope_for(p));
                     let fallback = match parent_scope {
                         Some(ps) => self.focusable_nodes_in_scope(ps),
                         None => self
