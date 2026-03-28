@@ -974,6 +974,10 @@ impl Renderer {
             let needs_measure =
                 node.force_dirty || node.state.is_dirty() || node.last_height.is_none();
             if !needs_measure {
+                // probe_rendered may linger from a previous frame where the node
+                // probed to height 0 (render_node never ran to clear it). Safe:
+                // the next dirty frame re-probes and overwrites both cached_buffer
+                // and probe_rendered before render_node reads them.
                 return node.last_height.unwrap_or(0);
             }
 
@@ -993,7 +997,24 @@ impl Renderer {
                         .render_erased(probe_area, &mut probe_buf, state);
                     let h = scan_content_height(&probe_buf, width, probe_height);
                     if h < probe_height || probe_height >= MAX_PROBE_HEIGHT {
-                        self.nodes[id].cached_buffer = Some(probe_buf);
+                        #[cfg(debug_assertions)]
+                        if h == MAX_PROBE_HEIGHT {
+                            eprintln!(
+                                "eye_declare: component content may exceed MAX_PROBE_HEIGHT \
+                                 ({MAX_PROBE_HEIGHT} rows); output will be truncated. \
+                                 Override desired_height() to declare the height explicitly."
+                            );
+                        }
+                        // Trim the probe buffer to actual content height to avoid
+                        // holding an oversized buffer in the cache.
+                        if h < probe_height && h > 0 {
+                            let trimmed_area = Rect::new(0, 0, width, h);
+                            let mut trimmed = Buffer::empty(trimmed_area);
+                            copy_buffer(&probe_buf, &mut trimmed, trimmed_area);
+                            self.nodes[id].cached_buffer = Some(trimmed);
+                        } else {
+                            self.nodes[id].cached_buffer = Some(probe_buf);
+                        }
                         self.nodes[id].probe_rendered = true;
                         break h;
                     }
