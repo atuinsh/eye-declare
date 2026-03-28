@@ -119,43 +119,34 @@ The default returns `None`, which means "measure from render output."
 
 ## Composite components
 
-Components can generate their own child trees by overriding `children()`:
+Components compose their visual output by overriding `view()`, which receives
+slot children and returns an element tree:
 
 ```rust
 impl Component for Card {
     type State = ();
 
-    fn children(&self, _state: &(), slot: Option<Elements>) -> Option<Elements> {
+    fn view(&self, _state: &(), children: Elements) -> Elements {
         let mut els = Elements::new();
-
-        // Add a header
-        els.add(TextBlock::new().line(&self.title, heading_style()));
-
-        // Include externally-provided children
-        if let Some(children) = slot {
-            els.group(children);
-        }
-
-        Some(els)
-    }
-
-    fn content_inset(&self, _state: &()) -> Insets {
-        Insets::all(1) // 1-cell border on all sides
-    }
-
-    fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) {
-        // Draw border chrome in the full area
-        // Children render inside the inset area automatically
+        els.add_with_children(
+            View {
+                border: Some(BorderType::Rounded),
+                title: Some(self.title.clone()),
+                ..View::default()
+            },
+            children,
+        );
+        els
     }
 }
 ```
 
-The `slot` parameter carries children provided externally (from the `element!` macro's brace syntax):
+The `children` parameter carries children provided externally (from the `element!` macro's brace syntax):
 
 ```rust
 element! {
     Card(title: "My Card".into()) {
-        "These children appear in the slot"
+        "These children appear inside the card"
         Spinner(label: "Loading...")
     }
 }
@@ -163,11 +154,11 @@ element! {
 
 ### Three composition patterns
 
-1. **Pass through** (default) — `children()` returns `slot` unchanged. Layout containers like `VStack` and `HStack` use this.
+1. **Pass through** (default) — `view()` returns `children` unchanged. Layout containers like `VStack` and `HStack` use this.
 
-2. **Generate own tree** — `children()` ignores `slot` and returns a custom `Elements`. The built-in `Spinner` does this: it generates an internal layout of animation frame + label.
+2. **Generate own tree** — `view()` ignores `children` and returns a custom `Elements`. A status badge generates its own Canvas rendering.
 
-3. **Wrap slot** — `children()` incorporates `slot` into a larger tree. A `Card` component wraps slot children with a header and border.
+3. **Wrap children** — `view()` incorporates `children` into a larger tree. A `Card` component wraps children with borders via `View`.
 
 ## Accepting slot children
 
@@ -181,12 +172,7 @@ struct Panel {
 
 impl Component for Panel {
     type State = ();
-
-    fn children(&self, _state: &(), slot: Option<Elements>) -> Option<Elements> {
-        slot // pass children through
-    }
-
-    fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) { /* ... */ }
+    // view() default passes children through — no override needed
 }
 
 impl_slot_children!(Panel);
@@ -202,30 +188,9 @@ element! {
 
 Without `impl_slot_children!`, attempting to use brace children on your component will produce a compile error.
 
-## Content insets
-
-Components that draw border chrome (boxes, padding, decorations) should declare `content_inset()` so the framework knows where to place children:
-
-```rust
-fn content_inset(&self, _state: &()) -> Insets {
-    Insets::all(1) // 1 cell on every side
-}
-```
-
-The component's `render()` receives the full area (including the border), while children are laid out inside the inset area. Available constructors:
-
-```rust
-Insets::ZERO                          // no insets (default)
-Insets::all(1)                        // 1 cell on all sides
-Insets::symmetric(1, 2)               // top/bottom 1, left/right 2
-Insets::new().top(2).left(1).right(1) // builder style
-```
-
 ## Using `view()` for declarative composition
 
-Instead of implementing `render()`, `content_inset()`, and `children()` separately, components can override `view()` to express their entire visual output as an element tree. This is especially powerful for composite components that combine chrome (borders, padding) with children.
-
-Override both `uses_view()` and `view()`:
+`view()` is the primary rendering method. Override it to compose your component's visual output as an element tree using `View` for chrome and `Canvas` for raw rendering:
 
 ```rust
 #[derive(Default)]
@@ -235,8 +200,6 @@ struct Card {
 
 impl Component for Card {
     type State = ();
-
-    fn uses_view(&self) -> bool { true }
 
     fn view(&self, _state: &(), children: Elements) -> Elements {
         let mut els = Elements::new();
@@ -257,12 +220,7 @@ impl Component for Card {
 impl_slot_children!(Card);
 ```
 
-When `uses_view()` returns `true`:
-- `render()` is not called — chrome is expressed as elements (e.g., `View`)
-- `content_inset()` is not used — insets are part of the tree
-- `children()` is not called — slot children arrive as the `children` parameter
-
-This replaces what would otherwise be manual border drawing in `render()`, `content_inset()` for child placement, and `children()` for slot handling.
+The default `view()` passes children through unchanged — layout containers like `VStack` and `HStack` use this behavior without overriding anything.
 
 ### Canvas for raw rendering
 
@@ -294,16 +252,15 @@ Use `render()` for **leaf-level custom rendering** where you need precise contro
 
 | Method | Required | Default | Purpose |
 |--------|----------|---------|---------|
-| `render()` | No | no-op | Draw into the allocated area |
-| `uses_view()` | No | `false` | Whether this component uses `view()` |
-| `view()` | No | empty | Return element tree (when `uses_view` is true) |
+| `view()` | No | passthrough | Return element tree for this component |
+| `render()` | No | no-op | Draw into buffer (primitive components only) |
 | `handle_event_capture()` | No | `Ignored` | Intercept events during capture phase (root → focused) |
 | `handle_event()` | No | `Ignored` | Handle events during bubble phase (focused → root) |
 | `is_focusable()` | No | `false` | Participate in Tab cycling |
 | `cursor_position()` | No | `None` | Position terminal cursor when focused |
 | `initial_state()` | No | `State::default()` | Custom initial state |
-| `content_inset()` | No | `Insets::ZERO` | Border/padding for children |
+| `desired_height()` | No | `None` | Height hint (primitive components only) |
+| `content_inset()` | No | `Insets::ZERO` | Border/padding inset (primitive components only) |
 | `layout()` | No | `Vertical` | Child layout direction |
 | `width_constraint()` | No | `Fill` | Width in horizontal containers |
 | `lifecycle()` | No | no-op | Declare effects (intervals, mount, etc.) |
-| `children()` | No | `slot` | Generate or modify child tree |

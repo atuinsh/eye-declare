@@ -84,10 +84,6 @@ impl Component for InputBox {
         hooks.use_autofocus();
     }
 
-    fn uses_view(&self) -> bool {
-        true
-    }
-
     fn view(&self, _state: &(), _children: Elements) -> Elements {
         // Capture owned data for the Canvas closure
         let text = self.text.clone();

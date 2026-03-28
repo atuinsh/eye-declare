@@ -689,8 +689,8 @@ mod tests {
             crate::insets::Insets::all(1) // 1-cell border all around
         }
 
-        fn children(&self, _state: &(), slot: Option<Elements>) -> Option<Elements> {
-            slot
+        fn view(&self, _state: &(), children: Elements) -> Elements {
+            children
         }
     }
 

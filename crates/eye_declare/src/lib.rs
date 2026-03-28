@@ -182,7 +182,9 @@ pub use app::{
     KeyboardProtocol,
 };
 pub use cells::Cells;
-pub use children::{AddTo, ChildCollector, ComponentWithSlot, DataHandle, SpliceInto};
+pub use children::{
+    AddTo, ChildCollector, ComponentWithSlot, DataChildren, DataHandle, SpliceInto,
+};
 pub use component::{Column, Component, EventResult, HStack, Tracked, VStack};
 pub use components::canvas::Canvas;
 pub use components::markdown::{Markdown, MarkdownState};

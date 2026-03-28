@@ -181,34 +181,44 @@ impl<S> DerefMut for Tracked<S> {
 ///
 /// # Minimal implementation
 ///
+/// Most components override [`view()`](Component::view) to compose their
+/// output from other components. The default passes children through
+/// unchanged.
+///
 /// ```ignore
-/// use eye_declare::Component;
-/// use ratatui_core::{buffer::Buffer, layout::Rect, widgets::Widget};
-/// use ratatui_widgets::paragraph::Paragraph;
+/// use eye_declare::{Component, Elements, View, Canvas};
+/// use ratatui_widgets::borders::BorderType;
 ///
 /// #[derive(Default)]
-/// struct Badge { pub label: String }
+/// struct Card { pub title: String }
 ///
-/// impl Component for Badge {
+/// impl Component for Card {
 ///     type State = ();
 ///
-///     fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) {
-///         Paragraph::new(self.label.as_str()).render(area, buf);
+///     fn view(&self, _state: &(), children: Elements) -> Elements {
+///         let mut els = Elements::new();
+///         els.add_with_children(
+///             View { border: Some(BorderType::Rounded),
+///                    title: Some(self.title.clone()),
+///                    ..View::default() },
+///             children,
+///         );
+///         els
 ///     }
 /// }
 /// ```
 ///
 /// # Children and composition
 ///
-/// Components that generate their own child trees override [`children`](Component::children).
-/// The `slot` parameter carries externally-provided children (from the
-/// `element!` macro's brace syntax). See the three patterns:
+/// The [`view()`](Component::view) method receives slot children and
+/// returns the component's element tree. Three patterns:
 ///
-/// - **Pass through** — return `slot` unchanged (default). Layout containers
-///   like [`VStack`] do this.
-/// - **Generate own tree** — ignore `slot`, return a custom [`Elements`].
-/// - **Wrap slot** — incorporate `slot` into a larger tree with headers,
-///   borders, etc.
+/// - **Pass through** (default) — return `children` unchanged. Layout
+///   containers like [`VStack`] use this.
+/// - **Generate own tree** — ignore `children`, return custom [`Elements`]
+///   using [`Canvas`](crate::Canvas) for raw rendering.
+/// - **Wrap children** — incorporate `children` into a larger tree with
+///   borders, padding, etc. via [`View`](crate::View).
 ///
 /// # Lifecycle
 ///
@@ -348,44 +358,24 @@ pub trait Component: Send + Sync + 'static {
     /// Default: no-op (no effects).
     fn lifecycle(&self, _hooks: &mut Hooks<Self::State>, _state: &Self::State) {}
 
-    /// Return child elements for this component.
-    ///
-    /// The `slot` parameter contains externally-provided children
-    /// (from `add_with_children`). The component decides what to do:
-    ///
-    /// - **Pass through (default):** Return `slot`. Layout containers
-    ///   like VStack/HStack use this — they accept external children.
-    /// - **Generate own tree:** Ignore slot, return custom Elements.
-    ///   A Spinner generates its own HStack with frame + label.
-    /// - **Wrap slot:** Incorporate slot into a larger tree. A Banner
-    ///   wraps slot children in a header + content layout.
-    /// - **No children:** Return None for a pure leaf component.
-    fn children(&self, _state: &Self::State, slot: Option<Elements>) -> Option<Elements> {
-        slot
-    }
-
-    /// Whether this component uses [`view()`](Component::view) to define
-    /// its element tree.
-    ///
-    /// Override to return `true` when implementing `view()`. When true,
-    /// the framework calls `view()` instead of `render()`, `children()`,
-    /// and `content_inset()`, treating this component as a transparent
-    /// container whose rendering is fully expressed in the returned tree.
-    fn uses_view(&self) -> bool {
-        false
-    }
-
     /// Return the element tree for this component.
     ///
-    /// Only called when [`uses_view()`](Component::uses_view) returns `true`.
-    /// The `children` parameter contains slot children passed by the parent
-    /// (from `element!` braces or `add_with_children`).
+    /// This is the primary rendering method. The `children` parameter
+    /// contains slot children passed by the parent (from `element!`
+    /// braces or `add_with_children`).
     ///
-    /// When a component uses `view()`:
-    /// - `render()` is not called (chrome is expressed via [`View`](crate::View)
-    ///   or [`Canvas`](crate::Canvas) in the returned tree)
-    /// - `content_inset()` is not used (insets are part of the tree)
-    /// - `children()` is not called (slot children arrive here directly)
+    /// The default passes children through unchanged — layout containers
+    /// like [`VStack`] and [`HStack`] use this behavior. Override to
+    /// compose a custom element tree:
+    ///
+    /// - **Wrap children** with chrome (borders, padding) using [`View`](crate::View)
+    /// - **Generate own tree** using [`Canvas`](crate::Canvas) for raw rendering
+    /// - **Ignore children** for pure leaf components
+    ///
+    /// Components that override `view()` are transparent containers —
+    /// the framework does not call their `render()` or `content_inset()`.
+    /// Those methods are only used by primitive components (View, Canvas)
+    /// that render directly into the buffer.
     ///
     /// # Example
     ///
@@ -398,8 +388,6 @@ pub trait Component: Send + Sync + 'static {
     /// impl Component for Card {
     ///     type State = ();
     ///
-    ///     fn uses_view(&self) -> bool { true }
-    ///
     ///     fn view(&self, _state: &(), children: Elements) -> Elements {
     ///         element! {
     ///             View(border: BorderType::Rounded, title: self.title.clone()) {
@@ -409,8 +397,8 @@ pub trait Component: Send + Sync + 'static {
     ///     }
     /// }
     /// ```
-    fn view(&self, _state: &Self::State, _children: Elements) -> Elements {
-        Elements::new()
+    fn view(&self, _state: &Self::State, children: Elements) -> Elements {
+        children
     }
 }
 

@@ -1,6 +1,6 @@
 use ratatui_core::{buffer::Buffer, layout::Rect, style::Style, widgets::Widget};
 
-use crate::children::{AddTo, ChildCollector, DataHandle};
+use crate::children::{ChildCollector, DataChildren};
 use crate::component::Component;
 use crate::wrap;
 
@@ -56,55 +56,65 @@ pub struct Line {
 }
 
 // ---------------------------------------------------------------------------
-// Collectors for Line and TextBlock
+// Data child types for Line and TextBlock
 // ---------------------------------------------------------------------------
 
-/// Collector for [`Span`] children inside a [`Line`].
-#[derive(Default)]
-pub struct LineChildren {
-    pub(crate) spans: Vec<Span>,
+/// Child type accepted by [`Line`] in the `element!` macro.
+///
+/// Line accepts [`Span`] children via `From<Span>`.
+pub enum LineChild {
+    /// A styled text span.
+    Span(Span),
 }
 
-impl AddTo<LineChildren> for Span {
-    type Handle<'a> = DataHandle;
-
-    fn add_to(self, collector: &mut LineChildren) -> DataHandle {
-        collector.spans.push(self);
-        DataHandle
+impl From<Span> for LineChild {
+    fn from(s: Span) -> Self {
+        LineChild::Span(s)
     }
 }
 
 impl ChildCollector for Line {
-    type Collector = LineChildren;
+    type Collector = DataChildren<LineChild>;
     type Output = Line;
 
-    fn finish(mut self, collector: LineChildren) -> Line {
-        self.spans = collector.spans;
+    fn finish(mut self, collector: DataChildren<LineChild>) -> Line {
+        self.spans = collector
+            .into_vec()
+            .into_iter()
+            .map(|c| match c {
+                LineChild::Span(s) => s,
+            })
+            .collect();
         self
     }
 }
 
-/// Collector for [`Line`] children inside a [`TextBlock`].
-#[derive(Default)]
-pub struct TextBlockChildren {
-    pub(crate) lines: Vec<Line>,
+/// Child type accepted by [`TextBlock`] in the `element!` macro.
+///
+/// TextBlock accepts [`Line`] children via `From<Line>`.
+pub enum TextBlockChild {
+    /// A line of styled text.
+    Line(Line),
 }
 
-impl AddTo<TextBlockChildren> for Line {
-    type Handle<'a> = DataHandle;
-
-    fn add_to(self, collector: &mut TextBlockChildren) -> DataHandle {
-        collector.lines.push(self);
-        DataHandle
+impl From<Line> for TextBlockChild {
+    fn from(l: Line) -> Self {
+        TextBlockChild::Line(l)
     }
 }
 
 impl ChildCollector for TextBlock {
-    type Collector = TextBlockChildren;
+    type Collector = DataChildren<TextBlockChild>;
     type Output = TextBlock;
 
-    fn finish(mut self, collector: TextBlockChildren) -> TextBlock {
-        self.lines = collector.lines;
+    fn finish(mut self, collector: DataChildren<TextBlockChild>) -> TextBlock {
+        self.lines = collector
+            .into_vec()
+            .into_iter()
+            .map(|c| match c {
+                TextBlockChild::Line(l) => l,
+            })
+            .collect();
         self
     }
 }

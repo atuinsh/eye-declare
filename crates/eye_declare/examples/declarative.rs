@@ -56,10 +56,6 @@ struct Card {
 impl Component for Card {
     type State = ();
 
-    fn uses_view(&self) -> bool {
-        true
-    }
-
     fn view(&self, _state: &(), children: Elements) -> Elements {
         let mut els = Elements::new();
         els.add_with_children(
@@ -96,10 +92,6 @@ struct Badge {
 
 impl Component for Badge {
     type State = ();
-
-    fn uses_view(&self) -> bool {
-        true
-    }
 
     fn view(&self, _state: &(), _children: Elements) -> Elements {
         let label = self.label.clone();

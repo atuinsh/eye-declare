@@ -16,8 +16,8 @@ use crate::node::WidthConstraint;
 /// # Implementations
 ///
 /// - **Blanket impl**: any [`Component`] can be added to [`Elements`].
-/// - **Data types**: [`Line`](crate::Line) adds to `TextBlockChildren`,
-///   [`Span`](crate::Span) adds to `LineChildren`. These produce compile
+/// - **Data types**: [`Line`](crate::Line) converts `Into<TextBlockChild>`,
+///   [`Span`](crate::Span) converts `Into<LineChild>`. These produce compile
 ///   errors if used in the wrong context.
 pub trait AddTo<Collector: ?Sized> {
     /// Handle returned after adding. Supports `.key()` / `.width()` chaining.
@@ -126,6 +126,65 @@ impl<C: Component> AddTo<Elements> for ComponentWithSlot<C> {
 
     fn add_to(self, els: &mut Elements) -> ElementHandle<'_> {
         els.add_with_children(self.component, self.children)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DataChildren<T> — generic collector for typed data children via Into<T>
+// ---------------------------------------------------------------------------
+
+/// Generic collector for components that accept typed data children.
+///
+/// `DataChildren<T>` collects children via `Into<T>` conversions, where `T`
+/// is a child enum defined by the component. This replaces per-component
+/// collector types with a single generic pattern.
+///
+/// # Example
+///
+/// ```ignore
+/// // Component defines what children it accepts
+/// enum TextChild {
+///     Line(Line),
+/// }
+///
+/// impl From<Line> for TextChild {
+///     fn from(l: Line) -> Self { TextChild::Line(l) }
+/// }
+///
+/// impl ChildCollector for TextBlock {
+///     type Collector = DataChildren<TextChild>;
+///     type Output = TextBlock;
+///     fn finish(mut self, collector: DataChildren<TextChild>) -> TextBlock {
+///         // process children...
+///         self
+///     }
+/// }
+/// ```
+pub struct DataChildren<T>(Vec<T>);
+
+impl<T> DataChildren<T> {
+    /// Consume the collector and return the collected children.
+    pub fn into_vec(self) -> Vec<T> {
+        self.0
+    }
+}
+
+impl<T> Default for DataChildren<T> {
+    fn default() -> Self {
+        DataChildren(Vec::new())
+    }
+}
+
+/// Any type that converts `Into<T>` can be added to a `DataChildren<T>` collector.
+impl<T, V: Into<T>> AddTo<DataChildren<T>> for V {
+    type Handle<'a>
+        = DataHandle
+    where
+        T: 'a;
+
+    fn add_to(self, collector: &mut DataChildren<T>) -> DataHandle {
+        collector.0.push(self.into());
+        DataHandle
     }
 }
 
