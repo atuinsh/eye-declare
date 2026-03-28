@@ -1,6 +1,6 @@
 use eye_declare::{
-    Column, Elements, HStack, InlineRenderer, Line, Markdown, Span, Spinner, TextBlock, VStack,
-    WidthConstraint, element,
+    BorderType, Column, Direction, Elements, HStack, InlineRenderer, Line, Markdown, Span, Spinner,
+    TextBlock, VStack, View, WidthConstraint, element,
 };
 
 /// Helper: build elements into a renderer and return child count.
@@ -524,6 +524,121 @@ fn hstack_mixed_columns_and_bare() {
     assert!(
         output_str.contains("fill"),
         "expected 'fill' in output: {:?}",
+        output_str
+    );
+}
+
+// ---------------------------------------------------------------------------
+// View component
+// ---------------------------------------------------------------------------
+
+#[test]
+fn view_default_with_children() {
+    let els = element! {
+        View {
+            "hello"
+            "world"
+        }
+    };
+
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+    let view_id = r.children(container)[0];
+    assert_eq!(r.children(view_id).len(), 2);
+}
+
+#[test]
+fn view_row_direction() {
+    let els = element! {
+        View(direction: Direction::Row) {
+            View(width: WidthConstraint::Fixed(10)) {
+                "left"
+            }
+            View {
+                "right"
+            }
+        }
+    };
+
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+
+    let output = r.render();
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(
+        output_str.contains("left"),
+        "expected 'left' in output: {:?}",
+        output_str
+    );
+    assert!(
+        output_str.contains("right"),
+        "expected 'right' in output: {:?}",
+        output_str
+    );
+}
+
+#[test]
+fn view_with_border_renders_content() {
+    let els = element! {
+        View(border: BorderType::Plain) {
+            "inside"
+        }
+    };
+
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+
+    let output = r.render();
+    let output_str = String::from_utf8_lossy(&output);
+    // Border corners should be present
+    assert!(
+        output_str.contains("┌"),
+        "expected top-left border in output: {:?}",
+        output_str
+    );
+    assert!(
+        output_str.contains("inside"),
+        "expected 'inside' in output: {:?}",
+        output_str
+    );
+}
+
+#[test]
+fn view_with_props_and_key() {
+    let els = element! {
+        View(key: "card", border: BorderType::Rounded, padding: 1u16) {
+            "content"
+        }
+    };
+
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+    assert!(r.find_by_key(container, "card").is_some());
+}
+
+#[test]
+fn view_nested() {
+    let els = element! {
+        View(border: BorderType::Plain) {
+            View(border: BorderType::Plain) {
+                "nested"
+            }
+        }
+    };
+
+    let mut r = InlineRenderer::new(40);
+    let container = r.push(VStack);
+    r.rebuild(container, els);
+
+    let output = r.render();
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(
+        output_str.contains("nested"),
+        "expected 'nested' in output: {:?}",
         output_str
     );
 }

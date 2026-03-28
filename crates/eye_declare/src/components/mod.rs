@@ -9,7 +9,10 @@ pub mod markdown;
 pub mod spinner;
 /// Styled text component with word wrapping. See [`TextBlock`].
 pub mod text;
+/// Unified layout container. See [`View`].
+pub mod view;
 
 pub use markdown::{Markdown, MarkdownState};
 pub use spinner::{Spinner, SpinnerState};
 pub use text::TextBlock;
+pub use view::{Direction, View};

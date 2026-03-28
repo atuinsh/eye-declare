@@ -66,6 +66,7 @@
 //! | [`TextBlock`] | Styled text with display-time word wrapping |
 //! | [`Spinner`] | Animated spinner with auto-tick via lifecycle hooks |
 //! | [`Markdown`] | Headings, bold, italic, inline code, code blocks, lists |
+//! | [`View`] | Unified layout container with optional borders, padding, and background |
 //! | [`VStack`] | Vertical container — children stack top-to-bottom |
 //! | [`HStack`] | Horizontal container with [`WidthConstraint`]-based layout |
 //!
@@ -143,8 +144,9 @@ pub mod children;
 pub mod component;
 
 /// Built-in components: [`TextBlock`](components::text::TextBlock),
-/// [`Spinner`](components::spinner::Spinner), and
-/// [`Markdown`](components::markdown::Markdown).
+/// [`Spinner`](components::spinner::Spinner),
+/// [`Markdown`](components::markdown::Markdown), and
+/// [`View`](components::view::View).
 pub mod components;
 
 /// The [`Elements`] list and [`ElementHandle`] for building component trees.
@@ -180,11 +182,17 @@ pub use component::{Column, Component, EventResult, HStack, Tracked, VStack};
 pub use components::markdown::{Markdown, MarkdownState};
 pub use components::spinner::{Spinner, SpinnerState};
 pub use components::text::{Line, Span, TextBlock};
+pub use components::view::{Direction, View};
 pub use element::{ElementHandle, Elements};
+
 pub use hooks::Hooks;
 pub use inline::InlineRenderer;
 pub use insets::Insets;
 pub use node::{Layout, NodeId, WidthConstraint};
+
+// Re-exports for component props
+/// Re-exported from `ratatui_widgets` for use with [`View::border`].
+pub use ratatui_widgets::borders::BorderType;
 
 /// Declarative element tree macro.
 ///
