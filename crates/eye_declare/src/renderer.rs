@@ -556,13 +556,7 @@ impl Renderer {
                 .component
                 .is_focusable_erased(node.state.inner_as_any())
             {
-                // If this node is inside a focus scope, save the current
-                // focus so it can be restored when the scope is removed.
-                // First save per scope wins (entry().or_insert).
-                if let Some(scope_id) = self.find_scope_for(id) {
-                    self.saved_focus.entry(scope_id).or_insert(self.focused);
-                }
-                self.focused = Some(id);
+                self.set_focus(id);
             }
         }
 
