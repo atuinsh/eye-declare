@@ -22,12 +22,9 @@ fi
 cargo ws publish "$BUMP" --force "*"
 
 # Determine the tag that was just created
-TAG=$(git describe --tags --abbrev=0)
+TAG=$(git tag --points-at HEAD | grep '^v' --color=never)
 
-# Get the changelog for the current release
-NOTES=$(git cliff --current)
-
-# Create a GitHub release
-gh release create "$TAG" --title "$TAG" --notes "$NOTES"
+# Create a GitHub release with notes from the current version
+git cliff --latest --github-token $(gh auth token) | gh release create "$TAG" --title "$TAG" --notes-file -
 
 echo "Released $TAG"
