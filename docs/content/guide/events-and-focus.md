@@ -161,6 +161,49 @@ let input_id = renderer.push(Input);
 renderer.set_focus(input_id);
 ```
 
+### Focus scopes
+
+A focus scope confines Tab/Shift-Tab cycling to a subtree of the component tree. This is useful for modals, popups, and nested forms where Tab should not escape the container.
+
+Mark a component as a focus scope boundary in its `lifecycle()`:
+
+```rust
+fn lifecycle(&self, hooks: &mut Hooks<Self::State>, _state: &Self::State) {
+    hooks.use_focus_scope();
+}
+```
+
+**Scope behavior:**
+
+- Tab/Shift-Tab cycle through focusable descendants within the scope only — they never escape to the parent tree
+- Scopes nest: a form section within a modal can have its own scope, and the innermost scope takes precedence
+- When a scope node is removed from the tree, focus is restored to whatever was focused before the scope captured it. If that node is gone too, the first focusable in the parent scope gets focus
+- With 0 or 1 focusable nodes inside a scope, Tab falls through to normal event dispatch so components can handle it (e.g., inserting a tab character)
+- Programmatic `set_focus()` ignores scope boundaries — it always works
+- Event dispatch (capture/bubble) is unaffected by scopes
+
+**Example: modal dialog with trapped focus**
+
+```rust
+struct Modal;
+
+impl Component for Modal {
+    type State = ();
+
+    fn lifecycle(&self, hooks: &mut Hooks<()>, _state: &()) {
+        hooks.use_focus_scope();
+    }
+
+    fn children(&self, _state: &(), slot: Option<Elements>) -> Option<Elements> {
+        slot
+    }
+
+    // ... render, desired_height, etc.
+}
+```
+
+Children of `Modal` will have their own Tab cycle — focus won't leak to components outside the modal. When the modal is removed, focus returns to wherever it was before.
+
 ## Cursor position
 
 Focused components can position the terminal's hardware cursor (the blinking cursor):

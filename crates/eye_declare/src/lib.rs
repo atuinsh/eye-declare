@@ -84,6 +84,7 @@
 //! - [`Hooks::use_mount`] — fires once after the component is built
 //! - [`Hooks::use_unmount`] — fires when the component is removed
 //! - [`Hooks::use_autofocus`] — request focus on mount
+//! - [`Hooks::use_focus_scope`] — confine Tab cycling to this subtree
 //! - [`Hooks::provide_context`] — make a value available to descendants
 //! - [`Hooks::use_context`] — read a value provided by an ancestor
 //!

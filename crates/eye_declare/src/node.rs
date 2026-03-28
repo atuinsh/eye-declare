@@ -149,7 +149,7 @@ impl<C: Component> AnyComponent for C {
             .expect("state type mismatch in lifecycle_erased");
 
         // Phase 1: collect hooks with immutable state reference
-        let (effects, autofocus, provided, consumers) = {
+        let (effects, autofocus, focus_scope, provided, consumers) = {
             let state: &C::State = tracked;
             let mut hooks = Hooks::<C::State>::new();
             self.lifecycle(&mut hooks, state);
@@ -164,6 +164,7 @@ impl<C: Component> AnyComponent for C {
         LifecycleOutput {
             effects,
             autofocus,
+            focus_scope,
             provided,
         }
     }
@@ -244,6 +245,7 @@ pub(crate) enum EffectKind {
 pub(crate) struct LifecycleOutput {
     pub effects: Vec<Effect>,
     pub autofocus: bool,
+    pub focus_scope: bool,
     pub provided: Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
 }
 
@@ -278,6 +280,8 @@ pub(crate) struct Node {
     pub width_constraint: WidthConstraint,
     /// Whether this node should receive focus on mount.
     pub autofocus: bool,
+    /// Whether this node is a focus scope boundary (Tab cycling trap).
+    pub focus_scope: bool,
 }
 
 impl Node {
@@ -300,6 +304,7 @@ impl Node {
             layout: Layout::default(),
             width_constraint: WidthConstraint::default(),
             autofocus: false,
+            focus_scope: false,
         }
     }
 
@@ -350,6 +355,11 @@ impl NodeArena {
         );
         self.slots[id.0] = None;
         self.free.push(id.0);
+    }
+
+    /// Check whether a node slot is still live (not freed).
+    pub fn is_live(&self, id: NodeId) -> bool {
+        self.slots.get(id.0).is_some_and(|s| s.is_some())
     }
 
     /// Iterate over all live nodes mutably.
