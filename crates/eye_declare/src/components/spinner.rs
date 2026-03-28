@@ -166,10 +166,6 @@ impl Component for Spinner {
         Paragraph::new(line).render(area, buf);
     }
 
-    fn desired_height(&self, _width: u16, _state: &Self::State) -> u16 {
-        1
-    }
-
     fn initial_state(&self) -> Option<SpinnerState> {
         Some(SpinnerState::new())
     }
@@ -184,13 +180,6 @@ impl Component for Spinner {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn spinner_height_is_one() {
-        let spinner = Spinner::new("Loading...");
-        let state = spinner.initial_state().unwrap();
-        assert_eq!(spinner.desired_height(80, &state), 1);
-    }
 
     #[test]
     fn spinner_renders_frame() {

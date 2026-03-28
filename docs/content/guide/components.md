@@ -9,7 +9,7 @@ Components are the building blocks of an eye-declare UI. Every piece of your int
 
 ## The Component trait
 
-At minimum, a component implements `render()` and `desired_height()`:
+At minimum, a component implements `render()`:
 
 ```rust
 use eye_declare::Component;
@@ -28,10 +28,6 @@ impl Component for Badge {
     fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) {
         let style = Style::default().fg(self.color);
         Paragraph::new(Span::styled(&self.label, style)).render(area, buf);
-    }
-
-    fn desired_height(&self, _width: u16, _state: &()) -> u16 {
-        1
     }
 }
 ```
@@ -94,20 +90,6 @@ impl Component for Timer {
 }
 ```
 
-## Desired height
-
-Every component must declare how tall it wants to be. The framework calls `desired_height()` during layout to allocate vertical space:
-
-```rust
-fn desired_height(&self, width: u16, state: &Self::State) -> u16 {
-    // A paragraph that wraps
-    let lines = wrap_text(&self.text, width);
-    lines.len() as u16
-}
-```
-
-The `width` parameter is the available width — use it to calculate wrapped heights. For container components (those with children), return `0` — the framework computes the total height from the children.
-
 ## Rendering
 
 `render()` receives a `Rect` (the allocated area) and a `Buffer` (the drawing surface). Use any Ratatui `Widget` to draw:
@@ -151,10 +133,6 @@ impl Component for Card {
         // Draw border chrome in the full area
         // Children render inside the inset area automatically
     }
-
-    fn desired_height(&self, _: u16, _: &()) -> u16 {
-        0 // containers return 0; framework sums children
-    }
 }
 ```
 
@@ -195,7 +173,6 @@ impl Component for Panel {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) { /* ... */ }
-    fn desired_height(&self, _: u16, _: &()) -> u16 { 0 }
 }
 
 impl_slot_children!(Panel);
@@ -235,7 +212,6 @@ Insets::new().top(2).left(1).right(1) // builder style
 | Method | Required | Default | Purpose |
 |--------|----------|---------|---------|
 | `render()` | Yes | — | Draw into the allocated area |
-| `desired_height()` | Yes | — | Declare vertical space needs |
 | `handle_event_capture()` | No | `Ignored` | Intercept events during capture phase (root → focused) |
 | `handle_event()` | No | `Ignored` | Handle events during bubble phase (focused → root) |
 | `is_focusable()` | No | `false` | Participate in Tab cycling |

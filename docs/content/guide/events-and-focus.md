@@ -198,7 +198,7 @@ impl Component for Modal {
         slot
     }
 
-    // ... render, desired_height, etc.
+    // ... render, etc.
 }
 ```
 
@@ -330,10 +330,6 @@ impl Component for Input {
             Span::styled(&state.text, Style::default().fg(Color::White)),
         ];
         Paragraph::new(Line::from(spans)).render(area, buf);
-    }
-
-    fn desired_height(&self, _width: u16, _state: &Self::State) -> u16 {
-        1
     }
 
     fn initial_state(&self) -> Option<InputState> {

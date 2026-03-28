@@ -127,8 +127,8 @@ Here's the full sequence when state changes trigger a rebuild:
 5. Removed nodes: unmount effects fire, node tombstoned
 6. `lifecycle()` runs for all live nodes
 7. Context propagation happens
-8. `desired_height()` measured for all nodes
-9. `render()` called for dirty nodes
+8. Heights measured (probe render for leaves, sum for containers)
+9. `render()` output blitted for dirty nodes
 10. Frame diffed and output emitted
 
 ## Tips

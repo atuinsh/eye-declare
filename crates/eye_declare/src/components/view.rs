@@ -180,11 +180,6 @@ impl Component for View {
         self.build_block().render(area, buf);
     }
 
-    fn desired_height(&self, _width: u16, _state: &()) -> u16 {
-        // Container — framework sums children heights + our content_inset
-        0
-    }
-
     fn content_inset(&self, _state: &()) -> Insets {
         let has_border = self.border.is_some();
         let border: u16 = if has_border { 1 } else { 0 };
@@ -314,12 +309,6 @@ mod tests {
             ..View::default()
         };
         assert_eq!(v.width_constraint(), WidthConstraint::Fixed(20));
-    }
-
-    #[test]
-    fn desired_height_is_zero_for_container() {
-        let v = View::default();
-        assert_eq!(v.desired_height(80, &()), 0);
     }
 
     #[test]

@@ -26,10 +26,6 @@ impl Component for MessageList {
         Paragraph::new(lines).render(area, buf);
     }
 
-    fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-        state.len() as u16
-    }
-
     fn initial_state(&self) -> Option<Vec<(String, Style)>> {
         Some(vec![])
     }

@@ -192,10 +192,6 @@ impl Component for StatusLog {
             .collect();
         Paragraph::new(lines).render(area, buf);
     }
-
-    fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-        state.entries.len() as u16
-    }
 }
 ```
 
