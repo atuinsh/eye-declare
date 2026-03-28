@@ -47,7 +47,7 @@ pub enum WidthConstraint {
 /// Type-erased component operations.
 pub(crate) trait AnyComponent: Send + Sync {
     fn render_erased(&self, area: Rect, buf: &mut Buffer, state: &dyn Any);
-    fn desired_height_erased(&self, width: u16, state: &dyn Any) -> u16;
+    fn desired_height_erased(&self, width: u16, state: &dyn Any) -> Option<u16>;
     fn handle_event_capture_erased(
         &self,
         event: &crossterm::event::Event,
@@ -78,7 +78,7 @@ impl<C: Component> AnyComponent for C {
         self.render(area, buf, state);
     }
 
-    fn desired_height_erased(&self, width: u16, state: &dyn Any) -> u16 {
+    fn desired_height_erased(&self, width: u16, state: &dyn Any) -> Option<u16> {
         let state = state
             .downcast_ref::<C::State>()
             .expect("state type mismatch in desired_height_erased");
@@ -267,6 +267,9 @@ pub(crate) struct Node {
     /// Set by the framework to force re-render (e.g., after width change).
     /// Cleared after rendering.
     pub force_dirty: bool,
+    /// Set during measure_height when a leaf was probe-rendered.
+    /// render_node uses the cached probe buffer instead of rendering again.
+    pub probe_rendered: bool,
     /// The area this node was last rendered into (set by the framework).
     pub layout_rect: Option<Rect>,
     /// TypeId of the Element that created this node (for reconciliation matching).
@@ -298,6 +301,7 @@ impl Node {
             children: Vec::new(),
             parent: None,
             force_dirty: false,
+            probe_rendered: false,
             layout_rect: None,
             element_type_id: None,
             key: None,

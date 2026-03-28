@@ -23,7 +23,6 @@ use crate::node::{Layout, WidthConstraint};
 /// impl Component for Card {
 ///     type State = ();
 ///     fn render(&self, area: Rect, buf: &mut Buffer, _: &()) { /* draw border */ }
-///     fn desired_height(&self, _: u16, _: &()) -> u16 { 0 }
 ///     fn children(&self, _: &(), slot: Option<Elements>) -> Option<Elements> {
 ///         slot // pass children through
 ///     }
@@ -196,8 +195,6 @@ impl<S> DerefMut for Tracked<S> {
 ///     fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) {
 ///         Paragraph::new(self.label.as_str()).render(area, buf);
 ///     }
-///
-///     fn desired_height(&self, _width: u16, _state: &()) -> u16 { 1 }
 /// }
 /// ```
 ///
@@ -224,10 +221,22 @@ pub trait Component: Send + Sync + 'static {
 
     /// Render into the given buffer region using current state.
     /// Can use any ratatui Widget internally.
+    ///
+    /// By default, the framework measures height from the render output
+    /// (probe render). Override [`desired_height`](Component::desired_height)
+    /// for components that fill their given area rather than rendering
+    /// a fixed amount of content.
     fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State);
 
-    /// How tall does this component want to be at the given width?
-    fn desired_height(&self, width: u16, state: &Self::State) -> u16;
+    /// Optional height hint. Return `Some(n)` to declare a fixed height
+    /// instead of letting the framework probe-render to measure.
+    ///
+    /// Override this for components that expand to fill their given area
+    /// (e.g., a bordered input box). Most components should leave the
+    /// default (`None`) and let the framework measure automatically.
+    fn desired_height(&self, _width: u16, _state: &Self::State) -> Option<u16> {
+        None
+    }
 
     /// Handle an input event during the **capture** phase (root → focused).
     ///
@@ -355,8 +364,7 @@ pub trait Component: Send + Sync + 'static {
 /// Vertical stack container — children render top-to-bottom.
 ///
 /// `VStack` renders nothing itself; it exists purely to group children.
-/// Each child receives the full parent width and its own
-/// [`desired_height`](Component::desired_height).
+/// Each child receives the full parent width and its own measured height.
 ///
 /// This is the default layout direction and the implicit root of every
 /// renderer. Use it explicitly when you need a named group:
@@ -376,10 +384,6 @@ impl Component for VStack {
     type State = ();
 
     fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &()) {}
-
-    fn desired_height(&self, _width: u16, _state: &()) -> u16 {
-        0
-    }
 }
 
 impl_slot_children!(VStack);
@@ -411,10 +415,6 @@ impl Component for HStack {
     type State = ();
 
     fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &()) {}
-
-    fn desired_height(&self, _width: u16, _state: &()) -> u16 {
-        0
-    }
 
     fn layout(&self) -> Layout {
         Layout::Horizontal
@@ -459,10 +459,6 @@ impl Component for Column {
     type State = ();
 
     fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &()) {}
-
-    fn desired_height(&self, _width: u16, _state: &()) -> u16 {
-        0
-    }
 
     fn width_constraint(&self) -> WidthConstraint {
         self.width

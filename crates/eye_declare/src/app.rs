@@ -1326,10 +1326,6 @@ mod tests {
             }
         }
 
-        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-            if state.value.is_some() { 1 } else { 0 }
-        }
-
         fn lifecycle(&self, hooks: &mut crate::hooks::Hooks<Self::State>, _state: &Self::State) {
             hooks.use_context::<String>(|value, state| {
                 state.value = value.cloned();

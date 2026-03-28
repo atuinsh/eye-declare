@@ -9,7 +9,7 @@ eye-declare uses a simple, predictable layout model: vertical stacking is the de
 
 ## Vertical layout
 
-By default, children stack top-to-bottom. Each child receives the full parent width and its `desired_height()`:
+By default, children stack top-to-bottom. Each child receives the full parent width and its measured height:
 
 ```rust
 element! {
@@ -21,9 +21,9 @@ element! {
 
 ```
 ┌──────────────────────────────┐
-│ First line                   │  ← desired_height = 1
-│ Second line                  │  ← desired_height = 1
-│ ⠋ Third line with spinner    │  ← desired_height = 1
+│ First line                   │  ← height = 1
+│ Second line                  │  ← height = 1
+│ ⠋ Third line with spinner    │  ← height = 1
 └──────────────────────────────┘
 ```
 
@@ -74,7 +74,7 @@ If an `HStack` has three columns — `Fixed(10)`, `Fill`, `Fill` — and the ter
 
 ### Height in horizontal layout
 
-The `HStack` height is the maximum `desired_height()` of its children. Shorter children are top-aligned within the row.
+The `HStack` height is the maximum measured height of its children. Shorter children are top-aligned within the row.
 
 ## Content insets
 
@@ -139,23 +139,6 @@ Header
 ⠋  Task name
    Task details
 Footer
-```
-
-## How desired_height works
-
-The framework calls `desired_height(width, state)` on every component during layout:
-
-- **Leaf components** return their actual height (e.g., a `TextBlock` with 3 wrapped lines returns `3`)
-- **Container components** return `0` — the framework sums their children's heights plus any insets
-
-The `width` parameter is the allocated width for that component. Use it to compute word-wrapped heights:
-
-```rust
-fn desired_height(&self, width: u16, state: &Self::State) -> u16 {
-    let text = &state.content;
-    let wrapped_lines = wrap_text(text, width as usize);
-    wrapped_lines.len() as u16
-}
 ```
 
 ## Width constraints on components

@@ -56,10 +56,6 @@ impl Component for Spinner {
         Paragraph::new(line).render(area, buf);
     }
 
-    fn desired_height(&self, _width: u16, _state: &Self::State) -> u16 {
-        1
-    }
-
     fn initial_state(&self) -> Option<SpinnerState> {
         Some(SpinnerState {
             label: String::new(),
@@ -92,19 +88,6 @@ impl Component for StreamingText {
         Paragraph::new(lines).render(area, buf);
     }
 
-    fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-        let visible: String = state.tokens[..state.revealed].join("");
-        let count = visible.lines().count();
-        // lines() returns 0 for empty string, but we want at least 0 height
-        if visible.is_empty() {
-            0
-        } else if visible.ends_with('\n') {
-            count as u16 + 1
-        } else {
-            count as u16
-        }
-    }
-
     fn initial_state(&self) -> Option<StreamingState> {
         Some(StreamingState {
             tokens: vec![],
@@ -123,10 +106,6 @@ impl Component for StaticLine {
     fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
         let line = Line::styled(state.0.as_str(), state.1);
         Paragraph::new(line).render(area, buf);
-    }
-
-    fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-        if state.0.is_empty() { 0 } else { 1 }
     }
 
     fn initial_state(&self) -> Option<(String, Style)> {

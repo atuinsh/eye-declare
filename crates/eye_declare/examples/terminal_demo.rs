@@ -107,23 +107,6 @@ impl Component for Input {
         }
     }
 
-    fn desired_height(&self, width: u16, state: &Self::State) -> u16 {
-        if width == 0 {
-            return 0;
-        }
-        let label_w = state.label.chars().count() as u16 + 2;
-        let text_w: u16 = state
-            .text
-            .chars()
-            .map(|c| UnicodeWidthChar::width(c).unwrap_or(0) as u16)
-            .sum();
-        let total = label_w + text_w;
-        if total == 0 {
-            return 1;
-        }
-        (total as u32).div_ceil(width as u32).max(1) as u16
-    }
-
     fn handle_event(&self, event: &Event, state: &mut Tracked<Self::State>) -> EventResult {
         if let Event::Key(KeyEvent {
             code,

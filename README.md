@@ -130,8 +130,6 @@ impl Component for StatusBadge {
         let line = Line::from(Span::styled(&self.label, Style::default().fg(self.color)));
         Paragraph::new(line).render(area, buf);
     }
-
-    fn desired_height(&self, _width: u16, _state: &()) -> u16 { 1 }
 }
 ```
 
@@ -172,8 +170,6 @@ impl Component for Card {
     fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) {
         // draw border chrome; children render inside the inset area
     }
-
-    fn desired_height(&self, _: u16, _: &()) -> u16 { 0 } // ignored for containers
 }
 ```
 

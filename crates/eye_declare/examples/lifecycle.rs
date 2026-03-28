@@ -58,10 +58,6 @@ impl Component for StatusLog {
         Paragraph::new(lines).render(area, buf);
     }
 
-    fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-        state.entries.len() as u16
-    }
-
     fn initial_state(&self) -> Option<StatusLogState> {
         let mut state = StatusLogState {
             entries: Vec::new(),

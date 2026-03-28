@@ -381,9 +381,11 @@ impl Renderer {
     pub fn remove(&mut self, id: NodeId) {
         assert!(id != self.root, "cannot remove root node");
 
-        // Remove from parent's children list
+        // Remove from parent's children list and invalidate parent's cached height
         if let Some(parent) = self.nodes[id].parent {
             self.nodes[parent].children.retain(|&child| child != id);
+            self.nodes[parent].force_dirty = true;
+            self.nodes[parent].last_height = None;
         }
 
         self.tombstone_subtree(id);
@@ -700,6 +702,9 @@ impl Renderer {
         }
 
         self.nodes[parent].children = new_children;
+        // Children changed — force re-measure and re-render of the parent.
+        self.nodes[parent].force_dirty = true;
+        self.nodes[parent].last_height = None;
     }
 
     /// Build elements into the tree as children of `parent`.
@@ -923,8 +928,10 @@ impl Renderer {
 
     /// Recursively measure the height of a node and its children.
     ///
-    /// Caches the result in `node.last_height` so that `render_node`
-    /// can read it without re-measuring.
+    /// For containers, sums children heights + insets. For leaves,
+    /// performs a probe render into a temporary buffer and scans for
+    /// actual content height. The probe buffer is cached for reuse
+    /// in `render_node`.
     fn measure_height(&mut self, id: NodeId, width: u16) -> u16 {
         let node = &self.nodes[id];
 
@@ -963,9 +970,57 @@ impl Renderer {
 
             children_height + insets.vertical()
         } else {
-            // Leaf: ask the component
-            let state = node.state.inner_as_any();
-            node.component.desired_height_erased(width, state)
+            // Leaf: use desired_height hint if provided, otherwise probe render.
+            let needs_measure =
+                node.force_dirty || node.state.is_dirty() || node.last_height.is_none();
+            if !needs_measure {
+                // probe_rendered may linger from a previous frame where the node
+                // probed to height 0 (render_node never ran to clear it). Safe:
+                // the next dirty frame re-probes and overwrites both cached_buffer
+                // and probe_rendered before render_node reads them.
+                return node.last_height.unwrap_or(0);
+            }
+
+            let state = self.nodes[id].state.inner_as_any();
+            if let Some(h) = self.nodes[id].component.desired_height_erased(width, state) {
+                // Component declared its height — no probe needed.
+                h
+            } else {
+                // Probe render: auto-growing buffer to measure actual content.
+                let mut probe_height = INITIAL_PROBE_HEIGHT;
+                loop {
+                    let probe_area = Rect::new(0, 0, width, probe_height);
+                    let mut probe_buf = Buffer::empty(probe_area);
+                    let state = self.nodes[id].state.inner_as_any();
+                    self.nodes[id]
+                        .component
+                        .render_erased(probe_area, &mut probe_buf, state);
+                    let h = scan_content_height(&probe_buf, width, probe_height);
+                    if h < probe_height || probe_height >= MAX_PROBE_HEIGHT {
+                        #[cfg(debug_assertions)]
+                        if h == MAX_PROBE_HEIGHT {
+                            eprintln!(
+                                "eye_declare: component content may exceed MAX_PROBE_HEIGHT \
+                                 ({MAX_PROBE_HEIGHT} rows); output will be truncated. \
+                                 Override desired_height() to declare the height explicitly."
+                            );
+                        }
+                        // Trim the probe buffer to actual content height to avoid
+                        // holding an oversized buffer in the cache.
+                        if h < probe_height && h > 0 {
+                            let trimmed_area = Rect::new(0, 0, width, h);
+                            let mut trimmed = Buffer::empty(trimmed_area);
+                            copy_buffer(&probe_buf, &mut trimmed, trimmed_area);
+                            self.nodes[id].cached_buffer = Some(trimmed);
+                        } else {
+                            self.nodes[id].cached_buffer = Some(probe_buf);
+                        }
+                        self.nodes[id].probe_rendered = true;
+                        break h;
+                    }
+                    probe_height = (probe_height * 2).min(MAX_PROBE_HEIGHT);
+                }
+            }
         };
 
         self.nodes[id].last_height = Some(height);
@@ -1052,11 +1107,18 @@ impl Renderer {
             self.nodes[id].state.clear_dirty();
             self.nodes[id].force_dirty = false;
         } else {
-            // Leaf: render the component
-            let state = self.nodes[id].state.inner_as_any();
-            self.nodes[id].component.render_erased(area, buffer, state);
+            // Leaf: use probe-rendered buffer if available, otherwise render fresh.
+            if self.nodes[id].probe_rendered {
+                if let Some(ref cached) = self.nodes[id].cached_buffer {
+                    copy_buffer(cached, buffer, area);
+                }
+                self.nodes[id].probe_rendered = false;
+            } else {
+                let state = self.nodes[id].state.inner_as_any();
+                self.nodes[id].component.render_erased(area, buffer, state);
+            }
 
-            // Cache and clean
+            // Re-cache with correct area coordinates and clean up.
             let mut node_buf = Buffer::empty(area);
             copy_buffer_region(buffer, &mut node_buf, area);
             self.nodes[id].cached_buffer = Some(node_buf);
@@ -1127,6 +1189,29 @@ fn allocate_widths(constraints: &[WidthConstraint], total: u16) -> Vec<u16> {
         .collect()
 }
 
+/// Initial height for leaf probe buffers. Doubled on overflow up to MAX.
+const INITIAL_PROBE_HEIGHT: u16 = 64;
+
+/// Maximum probe buffer height. Content beyond this is truncated.
+const MAX_PROBE_HEIGHT: u16 = 512;
+
+/// Scan a buffer bottom-to-top for the first row with non-default content.
+/// Returns the content height (last non-empty row + 1), or 0 if empty.
+fn scan_content_height(buf: &Buffer, width: u16, max_height: u16) -> u16 {
+    use ratatui_core::buffer::Cell;
+    let empty = Cell::EMPTY;
+    for y in (0..max_height).rev() {
+        for x in 0..width {
+            if let Some(cell) = buf.cell((x, y))
+                && cell != &empty
+            {
+                return y + 1;
+            }
+        }
+    }
+    0
+}
+
 /// Copy cells from a source buffer into a destination buffer at the given area.
 fn copy_buffer(src: &Buffer, dst: &mut Buffer, area: Rect) {
     let src_area = src.area;
@@ -1183,13 +1268,69 @@ mod tests {
             ratatui_core::widgets::Widget::render(para, area, buf);
         }
 
-        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-            state.len() as u16
-        }
-
         fn initial_state(&self) -> Option<Vec<String>> {
             Some(vec![])
         }
+    }
+
+    // --- Probe render / scan_content_height tests ---
+
+    #[test]
+    fn scan_content_height_empty_buffer() {
+        let buf = Buffer::empty(Rect::new(0, 0, 10, 64));
+        assert_eq!(scan_content_height(&buf, 10, 64), 0);
+    }
+
+    #[test]
+    fn scan_content_height_single_row() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 64));
+        buf.set_string(0, 0, "hello", ratatui_core::style::Style::default());
+        assert_eq!(scan_content_height(&buf, 10, 64), 1);
+    }
+
+    #[test]
+    fn scan_content_height_content_in_middle() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 64));
+        buf.set_string(0, 0, "line1", ratatui_core::style::Style::default());
+        buf.set_string(0, 4, "line5", ratatui_core::style::Style::default());
+        assert_eq!(scan_content_height(&buf, 10, 64), 5);
+    }
+
+    #[test]
+    fn scan_content_height_styled_space() {
+        use ratatui_core::style::{Color, Style};
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 64));
+        // A cell with just a background color (space character but styled)
+        buf.set_style(Rect::new(0, 2, 5, 1), Style::default().bg(Color::Red));
+        assert_eq!(scan_content_height(&buf, 10, 64), 3);
+    }
+
+    #[test]
+    fn probe_render_measures_tall_component() {
+        // A component that renders more than INITIAL_PROBE_HEIGHT rows
+        // should be measured correctly via auto-grow.
+        #[derive(Default)]
+        struct TallBlock {
+            lines: usize,
+        }
+        impl Component for TallBlock {
+            type State = ();
+            fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) {
+                for y in 0..(self.lines as u16).min(area.height) {
+                    buf.set_string(
+                        area.x,
+                        area.y + y,
+                        "x",
+                        ratatui_core::style::Style::default(),
+                    );
+                }
+            }
+        }
+
+        let mut r = Renderer::new(10);
+        r.push(TallBlock { lines: 100 });
+        let frame = r.render();
+        assert_eq!(frame.area().height, 100);
     }
 
     // --- Existing tests (flat API, should still pass) ---
@@ -1403,10 +1544,6 @@ mod tests {
             ratatui_core::widgets::Widget::render(Paragraph::new(line), area, buf);
         }
 
-        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-            if state.is_empty() { 0 } else { 1 }
-        }
-
         fn handle_event(
             &self,
             event: &crossterm::event::Event,
@@ -1580,10 +1717,6 @@ mod tests {
             ratatui_core::widgets::Widget::render(Paragraph::new(line), area, buf);
         }
 
-        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-            if state.is_empty() { 0 } else { 1 }
-        }
-
         fn is_focusable(&self, _state: &Self::State) -> bool {
             true
         }
@@ -1708,10 +1841,6 @@ mod tests {
 
         fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &()) {}
 
-        fn desired_height(&self, _width: u16, _state: &()) -> u16 {
-            0
-        }
-
         fn initial_state(&self) -> Option<()> {
             Some(())
         }
@@ -1730,10 +1859,6 @@ mod tests {
         fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
             let line = ratatui_core::text::Line::raw(state.as_str());
             ratatui_core::widgets::Widget::render(Paragraph::new(line), area, buf);
-        }
-
-        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-            if state.is_empty() { 0 } else { 1 }
         }
 
         fn is_focusable(&self, _state: &Self::State) -> bool {
@@ -2020,10 +2145,6 @@ mod tests {
             ratatui_core::widgets::Widget::render(para, area, buf);
         }
 
-        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-            state.len() as u16
-        }
-
         fn handle_event_capture(
             &self,
             event: &crossterm::event::Event,
@@ -2130,10 +2251,6 @@ mod tests {
             type State = Vec<String>;
 
             fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &Self::State) {}
-
-            fn desired_height(&self, _width: u16, _state: &Self::State) -> u16 {
-                1
-            }
 
             fn is_focusable(&self, _state: &Self::State) -> bool {
                 true
@@ -2367,9 +2484,6 @@ mod tests {
                 let line = ratatui_core::text::Line::raw(state.as_str());
                 ratatui_core::widgets::Widget::render(Paragraph::new(line), area, buf);
             }
-            fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-                if state.is_empty() { 0 } else { 1 }
-            }
             fn initial_state(&self) -> Option<String> {
                 Some(String::new())
             }
@@ -2414,10 +2528,6 @@ mod tests {
         fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
             let line = ratatui_core::text::Line::raw(state.0.as_str());
             ratatui_core::widgets::Widget::render(Paragraph::new(line), area, buf);
-        }
-
-        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-            if state.0.is_empty() { 0 } else { 1 }
         }
 
         fn initial_state(&self) -> Option<(String, usize)> {
@@ -2862,10 +2972,6 @@ mod tests {
             ratatui_core::widgets::Widget::render(Paragraph::new(line), area, buf);
         }
 
-        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-            if state.log.is_empty() { 0 } else { 1 }
-        }
-
         fn initial_state(&self) -> Option<LifecycleState> {
             Some(LifecycleState {
                 log: Vec::new(),
@@ -3271,10 +3377,6 @@ mod tests {
             }
         }
 
-        fn desired_height(&self, _width: u16, _state: &Self::State) -> u16 {
-            0
-        }
-
         fn content_inset(&self, state: &Self::State) -> Insets {
             *state
         }
@@ -3419,10 +3521,6 @@ mod tests {
 
         fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &Self::State) {}
 
-        fn desired_height(&self, _width: u16, _state: &Self::State) -> u16 {
-            0 // children determine height
-        }
-
         fn initial_state(&self) -> Option<LabeledRowState> {
             Some(LabeledRowState {
                 prefix: String::new(),
@@ -3545,9 +3643,6 @@ mod tests {
         type State = String; // banner title
 
         fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &Self::State) {}
-        fn desired_height(&self, _width: u16, _state: &Self::State) -> u16 {
-            0
-        }
         fn initial_state(&self) -> Option<String> {
             Some(String::new())
         }
@@ -3645,10 +3740,6 @@ mod tests {
         fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
             let line = ratatui_core::text::Line::raw(state.0.as_str());
             ratatui_core::widgets::Widget::render(Paragraph::new(line), area, buf);
-        }
-
-        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-            if state.0.is_empty() { 0 } else { 1 }
         }
 
         fn initial_state(&self) -> Option<(String, usize)> {
@@ -3758,9 +3849,6 @@ mod tests {
                 let line = ratatui_core::text::Line::raw(text);
                 ratatui_core::widgets::Widget::render(Paragraph::new(line), area, buf);
             }
-            fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-                if state.is_empty() { 0 } else { 1 }
-            }
             fn initial_state(&self) -> Option<Vec<String>> {
                 Some(Vec::new())
             }
@@ -3812,9 +3900,6 @@ mod tests {
     impl Component for ContextProvider {
         type State = ();
         fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &()) {}
-        fn desired_height(&self, _width: u16, _state: &()) -> u16 {
-            0
-        }
         fn lifecycle(&self, hooks: &mut crate::hooks::Hooks<()>, _state: &()) {
             hooks.provide_context(self.value.clone());
         }
@@ -3838,9 +3923,6 @@ mod tests {
                 let para = Paragraph::new(text);
                 ratatui_core::widgets::Widget::render(para, area, buf);
             }
-        }
-        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-            if state.received.is_some() { 1 } else { 0 }
         }
         fn lifecycle(&self, hooks: &mut crate::hooks::Hooks<Self::State>, _state: &Self::State) {
             hooks.use_context::<String>(|value, state| {

@@ -106,14 +106,6 @@ impl Component for Markdown {
         wrap::wrapping_paragraph(text).render(area, buf);
     }
 
-    fn desired_height(&self, width: u16, state: &Self::State) -> u16 {
-        if self.source.is_empty() || width == 0 {
-            return 0;
-        }
-        let text = render_markdown(&self.source, state);
-        wrap::wrapped_line_count(&text, width)
-    }
-
     fn initial_state(&self) -> Option<MarkdownState> {
         Some(MarkdownState::new())
     }
@@ -307,20 +299,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_markdown() {
-        let md = Markdown::new("");
-        let state = md.initial_state().unwrap();
-        assert_eq!(md.desired_height(80, &state), 0);
-    }
-
-    #[test]
-    fn plain_text() {
-        let md = Markdown::new("Hello world");
-        let state = md.initial_state().unwrap();
-        assert_eq!(md.desired_height(80, &state), 1);
-    }
-
-    #[test]
     fn heading_renders() {
         let md = Markdown::new("# Title");
         let state = md.initial_state().unwrap();
@@ -412,17 +390,5 @@ mod tests {
         let text = render_markdown(&md.source, &state);
         // Should have: heading, blank, paragraph, blank, code, blank, list item
         assert!(text.lines.len() >= 5);
-    }
-
-    #[test]
-    fn wraps_at_width() {
-        let md = Markdown::new(
-            "This is a long paragraph that should wrap when rendered at a narrow width.",
-        );
-        let state = md.initial_state().unwrap();
-        let height_wide = md.desired_height(80, &state);
-        let height_narrow = md.desired_height(20, &state);
-        assert_eq!(height_wide, 1);
-        assert!(height_narrow >= 4);
     }
 }

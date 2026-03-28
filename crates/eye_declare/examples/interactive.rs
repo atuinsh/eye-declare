@@ -110,32 +110,6 @@ impl Component for Input {
         }
     }
 
-    fn desired_height(&self, width: u16, state: &Self::State) -> u16 {
-        if width == 0 {
-            return 0;
-        }
-        let label_width = state.label.chars().count() as u16 + 2; // ": "
-        // +1 for the cursor character (space if at end)
-        let cursor_extra = if state.cursor >= state.text.len() {
-            1
-        } else {
-            0
-        };
-        let total_cols: u16 = label_width
-            + state
-                .text
-                .chars()
-                .map(|c| UnicodeWidthChar::width(c).unwrap_or(0) as u16)
-                .sum::<u16>()
-            + cursor_extra;
-
-        if total_cols == 0 {
-            return 1;
-        }
-        // Ceiling division
-        (total_cols as u32).div_ceil(width as u32) as u16
-    }
-
     fn handle_event(&self, event: &Event, state: &mut Tracked<Self::State>) -> EventResult {
         if let Event::Key(KeyEvent {
             code,
@@ -228,10 +202,6 @@ impl Component for MessageLog {
             })
             .collect();
         Paragraph::new(lines).render(area, buf);
-    }
-
-    fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-        state.len() as u16
     }
 
     fn initial_state(&self) -> Option<Vec<String>> {

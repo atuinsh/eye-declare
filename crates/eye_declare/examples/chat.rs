@@ -149,8 +149,8 @@ impl Component for InputBox {
         }
     }
 
-    fn desired_height(&self, _width: u16, _state: &()) -> u16 {
-        3 // border-top + content + border-bottom
+    fn desired_height(&self, _width: u16, _state: &()) -> Option<u16> {
+        Some(3) // border-top + content + border-bottom
     }
 
     fn is_focusable(&self, _state: &()) -> bool {
@@ -201,10 +201,6 @@ impl Component for StreamingDots {
         };
         let line = Line::from(Span::styled(dots, Style::default().fg(Color::DarkGray)));
         Paragraph::new(line).render(area, buf);
-    }
-
-    fn desired_height(&self, _width: u16, _state: &Self::State) -> u16 {
-        1
     }
 
     fn initial_state(&self) -> Option<StreamingDotsState> {

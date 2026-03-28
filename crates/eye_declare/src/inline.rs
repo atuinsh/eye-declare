@@ -531,10 +531,6 @@ mod tests {
             ratatui_core::widgets::Widget::render(para, area, buf);
         }
 
-        fn desired_height(&self, _width: u16, state: &Self::State) -> u16 {
-            state.len() as u16
-        }
-
         fn initial_state(&self) -> Option<Vec<String>> {
             Some(vec![])
         }
@@ -687,10 +683,6 @@ mod tests {
                     buf[(area.x + area.width - 1, y)].set_char('│');
                 }
             }
-        }
-
-        fn desired_height(&self, _width: u16, _state: &()) -> u16 {
-            0 // container; height comes from children
         }
 
         fn content_inset(&self, _state: &()) -> crate::insets::Insets {
