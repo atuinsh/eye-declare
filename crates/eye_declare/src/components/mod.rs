@@ -11,7 +11,10 @@ pub mod spinner;
 pub mod text;
 /// Unified layout container. See [`View`].
 pub mod view;
+/// Raw buffer rendering component. See [`Canvas`].
+pub mod canvas;
 
+pub use canvas::Canvas;
 pub use markdown::{Markdown, MarkdownState};
 pub use spinner::{Spinner, SpinnerState};
 pub use text::TextBlock;
