@@ -112,3 +112,4 @@ Key source files in `crates/eye_declare/src/`:
 ## Commits
 
 - Use conventional commit format for easy changelog generation
+- Run `cargo fmt` and `cargo clippy -- -D warnings` before a permanent commit
