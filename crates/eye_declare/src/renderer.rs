@@ -216,8 +216,13 @@ impl Renderer {
             if node.frozen {
                 continue;
             }
-            let state_any = node.state.as_any_mut();
-            let result = node.component.handle_event_capture_erased(event, state_any);
+            // Hook handler takes priority over trait method
+            let result = if let Some(ref hook) = node.hook_capture {
+                hook.call(event, node.state.as_any_mut())
+            } else {
+                let state_any = node.state.as_any_mut();
+                node.component.handle_event_capture_erased(event, state_any)
+            };
             if result == EventResult::Consumed {
                 return EventResult::Consumed;
             }
@@ -229,8 +234,13 @@ impl Renderer {
             if node.frozen {
                 continue;
             }
-            let state_any = node.state.as_any_mut();
-            let result = node.component.handle_event_erased(event, state_any);
+            // Hook handler takes priority over trait method
+            let result = if let Some(ref hook) = node.hook_event {
+                hook.call(event, node.state.as_any_mut())
+            } else {
+                let state_any = node.state.as_any_mut();
+                node.component.handle_event_erased(event, state_any)
+            };
             if result == EventResult::Consumed {
                 return EventResult::Consumed;
             }
@@ -251,6 +261,16 @@ impl Renderer {
         path
     }
 
+    /// Check if a node is focusable (hook value overrides trait method).
+    fn is_node_focusable(&self, id: NodeId) -> bool {
+        let node = &self.nodes[id];
+        if let Some(focusable) = node.hook_focusable {
+            return focusable;
+        }
+        let state = node.state.inner_as_any();
+        node.component.is_focusable_erased(state)
+    }
+
     /// Collect focusable node IDs in depth-first tree order.
     fn focusable_nodes(&self) -> Vec<NodeId> {
         let mut result = Vec::new();
@@ -263,8 +283,7 @@ impl Renderer {
         if node.frozen {
             return;
         }
-        let state = node.state.inner_as_any();
-        if node.component.is_focusable_erased(state) {
+        if self.is_node_focusable(id) {
             result.push(id);
         }
         for &child in &node.children {
@@ -300,8 +319,7 @@ impl Renderer {
         // Check focusability before the scope boundary check so that
         // a node which is both focusable and a scope boundary can still
         // participate in its parent scope's Tab cycle.
-        let state = node.state.inner_as_any();
-        if node.component.is_focusable_erased(state) {
+        if self.is_node_focusable(id) {
             result.push(id);
         }
         // Stop descent at nested scope boundaries (but not the scope itself).
@@ -552,14 +570,8 @@ impl Renderer {
     /// Fire and remove all OnMount effects for a node.
     fn fire_mount(&mut self, id: NodeId) {
         // Autofocus: set focus when this node mounts (if focusable)
-        if self.nodes[id].autofocus {
-            let node = &self.nodes[id];
-            if node
-                .component
-                .is_focusable_erased(node.state.inner_as_any())
-            {
-                self.set_focus(id);
-            }
+        if self.nodes[id].autofocus && self.is_node_focusable(id) {
+            self.set_focus(id);
         }
 
         if let Some(effects) = self.effects.remove(&id) {
@@ -769,6 +781,10 @@ impl Renderer {
         }
         self.nodes[id].autofocus = output.autofocus;
         self.nodes[id].focus_scope = output.focus_scope;
+        self.nodes[id].hook_focusable = output.focusable;
+        self.nodes[id].hook_cursor = output.cursor_hook;
+        self.nodes[id].hook_event = output.event_hook;
+        self.nodes[id].hook_capture = output.capture_hook;
         output.provided
     }
 
@@ -918,11 +934,14 @@ impl Renderer {
         if let Some(focused) = self.focused {
             let node = &self.nodes[focused];
             if let Some(layout_rect) = node.layout_rect {
-                let state = node.state.inner_as_any();
-                if let Some((rel_col, rel_row)) =
+                // Hook cursor takes priority over trait method
+                let cursor_pos = if let Some(ref hook) = node.hook_cursor {
+                    hook.call(layout_rect, node.state.inner_as_any())
+                } else {
+                    let state = node.state.inner_as_any();
                     node.component.cursor_position_erased(layout_rect, state)
-                {
-                    // Convert to absolute buffer coordinates
+                };
+                if let Some((rel_col, rel_row)) = cursor_pos {
                     self.cursor_hint = Some((layout_rect.x + rel_col, layout_rect.y + rel_row));
                 }
             }

@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use eye_declare::{
-    Application, BorderType, Canvas, Cells, Component, ControlFlow, Elements, Handle, Hooks,
-    Markdown, TextBlock, Tracked, View, component, element, props,
+    Application, BorderType, Canvas, Cells, ControlFlow, Elements, Handle, Hooks, Markdown,
+    TextBlock, View, component, element, props,
 };
 use ratatui_core::{
     buffer::Buffer,
@@ -68,11 +68,7 @@ enum MessageKind {
 }
 
 // ---------------------------------------------------------------------------
-// InputBox component — bordered text input
-//
-// Can't fully use #[component] yet: needs is_focusable, cursor_position,
-// and handle_event which require hooks that don't exist yet.
-// Manual Component impl for now.
+// InputBox component — bordered text input using #[component]
 // ---------------------------------------------------------------------------
 
 #[props]
@@ -84,64 +80,49 @@ struct InputBox {
     prompt: String,
 }
 
-impl Component for InputBox {
-    type State = ();
+#[component(props = InputBox)]
+fn input_box(props: &InputBox, hooks: &mut Hooks<()>) -> Elements {
+    hooks.use_autofocus();
+    hooks.use_focusable(true);
 
-    fn lifecycle(&self, hooks: &mut Hooks<Self::State>, _state: &Self::State) {
-        hooks.use_autofocus();
-    }
-
-    fn view(&self, _state: &(), _children: Elements) -> Elements {
-        let text = self.text.clone();
-
-        element! {
-            View(
-                border: BorderType::Plain,
-                border_style: Style::default().fg(Color::DarkGray),
-                title: format!(" {} ", self.prompt),
-                title_style: Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                padding_left: Some(Cells(1)),
-                padding_right: Some(Cells(1)),
-            ) {
-                Canvas(render_fn: move |area: Rect, buf: &mut Buffer| {
-                    if area.width == 0 || area.height == 0 {
-                        return;
-                    }
-                    let display = if text.is_empty() {
-                        Line::from(Span::styled(
-                            "Type a message...",
-                            Style::default()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::ITALIC),
-                        ))
-                    } else {
-                        Line::from(Span::styled(&text, Style::default().fg(Color::White)))
-                    };
-                    Paragraph::new(display).render(area, buf);
-                }, height: 1u16)
-            }
-        }
-    }
-
-    fn is_focusable(&self, _state: &()) -> bool {
-        true
-    }
-
-    fn cursor_position(&self, area: Rect, _state: &()) -> Option<(u16, u16)> {
-        let col = 2 + self.cursor as u16;
+    let cursor_pos = props.cursor;
+    hooks.use_cursor(move |area: Rect, _state: &()| {
+        let col = 2 + cursor_pos as u16;
         if col < area.width.saturating_sub(1) {
             Some((col, 1))
         } else {
             Some((area.width.saturating_sub(2), 1))
         }
-    }
+    });
 
-    fn handle_event(
-        &self,
-        _event: &crossterm::event::Event,
-        _state: &mut Tracked<()>,
-    ) -> eye_declare::EventResult {
-        eye_declare::EventResult::Ignored
+    let text = props.text.clone();
+
+    element! {
+        View(
+            border: BorderType::Plain,
+            border_style: Style::default().fg(Color::DarkGray),
+            title: format!(" {} ", props.prompt),
+            title_style: Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            padding_left: Some(Cells(1)),
+            padding_right: Some(Cells(1)),
+        ) {
+            Canvas(render_fn: move |area: Rect, buf: &mut Buffer| {
+                if area.width == 0 || area.height == 0 {
+                    return;
+                }
+                let display = if text.is_empty() {
+                    Line::from(Span::styled(
+                        "Type a message...",
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
+                    ))
+                } else {
+                    Line::from(Span::styled(&text, Style::default().fg(Color::White)))
+                };
+                Paragraph::new(display).render(area, buf);
+            }, height: 1u16)
+        }
     }
 }
 

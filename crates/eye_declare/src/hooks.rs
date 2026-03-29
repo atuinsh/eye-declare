@@ -2,9 +2,14 @@ use std::any::{Any, TypeId};
 use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
-use crate::component::Tracked;
+use ratatui_core::layout::Rect;
+
+use crate::component::{EventResult, Tracked};
 use crate::context::ContextMap;
-use crate::node::{Effect, EffectKind, TypedEffectHandler};
+use crate::node::{
+    AnyCursorHook, AnyEventHook, Effect, EffectKind, TypedCursorHook, TypedEffectHandler,
+    TypedEventHook,
+};
 
 /// A type-erased context consumer callback.
 ///
@@ -20,6 +25,10 @@ pub(crate) type Decomposed<S> = (
     bool,
     Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
     Vec<ConsumerFn<S>>,
+    Option<bool>,
+    Option<Box<dyn AnyCursorHook>>,
+    Option<Box<dyn AnyEventHook>>,
+    Option<Box<dyn AnyEventHook>>,
 );
 
 /// Effect collector for declarative lifecycle management.
@@ -59,6 +68,10 @@ pub struct Hooks<S: 'static> {
     focus_scope: bool,
     provided: Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
     consumers: Vec<ConsumerFn<S>>,
+    focusable: Option<bool>,
+    cursor_hook: Option<Box<dyn AnyCursorHook>>,
+    event_hook: Option<Box<dyn AnyEventHook>>,
+    capture_hook: Option<Box<dyn AnyEventHook>>,
     _marker: PhantomData<S>,
 }
 
@@ -77,6 +90,10 @@ impl<S: Send + Sync + 'static> Hooks<S> {
             focus_scope: false,
             provided: Vec::new(),
             consumers: Vec::new(),
+            focusable: None,
+            cursor_hook: None,
+            event_hook: None,
+            capture_hook: None,
             _marker: PhantomData,
         }
     }
@@ -201,6 +218,60 @@ impl<S: Send + Sync + 'static> Hooks<S> {
         ));
     }
 
+    /// Declare this component as focusable (or not).
+    ///
+    /// Focusable components participate in Tab cycling. This overrides
+    /// the component's [`is_focusable`](crate::Component::is_focusable)
+    /// trait method.
+    pub fn use_focusable(&mut self, focusable: bool) {
+        self.focusable = Some(focusable);
+    }
+
+    /// Declare a cursor position callback for when this component has focus.
+    ///
+    /// Returns `(col, row)` relative to the component's render area,
+    /// or `None` to hide the cursor. This overrides the component's
+    /// [`cursor_position`](crate::Component::cursor_position) trait method.
+    pub fn use_cursor(
+        &mut self,
+        handler: impl Fn(Rect, &S) -> Option<(u16, u16)> + Send + Sync + 'static,
+    ) {
+        self.cursor_hook = Some(Box::new(TypedCursorHook {
+            handler: Box::new(handler),
+        }));
+    }
+
+    /// Declare an event handler for the bubble phase (focused → root).
+    ///
+    /// Return [`EventResult::Consumed`](crate::EventResult::Consumed)
+    /// to stop propagation. This overrides the component's
+    /// [`handle_event`](crate::Component::handle_event) trait method.
+    ///
+    /// The handler receives `&mut S` (not `&mut Tracked<S>`) — mutations
+    /// automatically mark the component dirty.
+    pub fn use_event(
+        &mut self,
+        handler: impl Fn(&crossterm::event::Event, &mut S) -> EventResult + Send + Sync + 'static,
+    ) {
+        self.event_hook = Some(Box::new(TypedEventHook {
+            handler: Box::new(handler),
+        }));
+    }
+
+    /// Declare an event handler for the capture phase (root → focused).
+    ///
+    /// The capture phase fires before the bubble phase. Return
+    /// [`EventResult::Consumed`](crate::EventResult::Consumed) to
+    /// prevent the event from reaching the focused component.
+    pub fn use_event_capture(
+        &mut self,
+        handler: impl Fn(&crossterm::event::Event, &mut S) -> EventResult + Send + Sync + 'static,
+    ) {
+        self.capture_hook = Some(Box::new(TypedEventHook {
+            handler: Box::new(handler),
+        }));
+    }
+
     /// Consume the hooks, returning effects, provided contexts, and consumers.
     pub(crate) fn decompose(self) -> Decomposed<S> {
         (
@@ -209,6 +280,10 @@ impl<S: Send + Sync + 'static> Hooks<S> {
             self.focus_scope,
             self.provided,
             self.consumers,
+            self.focusable,
+            self.cursor_hook,
+            self.event_hook,
+            self.capture_hook,
         )
     }
 }
