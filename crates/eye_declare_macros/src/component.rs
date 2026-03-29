@@ -2,6 +2,12 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{parse2, Ident, ItemFn, Token};
 
+/// Check if a type matches `&mut Hooks<T>` for some `T`.
+///
+/// Matches on the last path segment being `"Hooks"`, which is intentionally
+/// loose — it accepts any crate's `Hooks` type. In practice this is fine
+/// because the generated code calls `::eye_declare::Hooks` methods, so a
+/// mismatched type would produce a clear compile error in the generated impl.
 fn is_hooks_type(ty: &syn::Type) -> bool {
     if let syn::Type::Reference(type_ref) = ty
         && type_ref.mutability.is_some()
@@ -31,6 +37,7 @@ impl syn::parse::Parse for ComponentArgs {
         let mut state = None;
         let mut children = None;
         let mut initial_state = None;
+        let mut initial_state_key_span: Option<proc_macro2::Span> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -38,6 +45,7 @@ impl syn::parse::Parse for ComponentArgs {
 
             match key.to_string().as_str() {
                 "initial_state" => {
+                    initial_state_key_span = Some(key.span());
                     let expr: syn::Expr = input.parse()?;
                     initial_state = Some(expr);
                 }
@@ -68,10 +76,13 @@ impl syn::parse::Parse for ComponentArgs {
 
         let props = props.ok_or_else(|| input.error("#[component] requires `props = Type`"))?;
 
-        if initial_state.is_some() && state.is_none() {
-            return Err(input.error(
-                "#[component] `initial_state` requires `state` to also be specified",
-            ));
+        if let Some(span) = initial_state_key_span {
+            if state.is_none() {
+                return Err(syn::Error::new(
+                    span,
+                    "#[component] `initial_state` requires `state` to also be specified",
+                ));
+            }
         }
 
         Ok(ComponentArgs {

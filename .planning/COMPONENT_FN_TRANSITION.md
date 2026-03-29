@@ -91,9 +91,9 @@ Old: struct + `impl_slot_children!` macro. New: `#[component(children = Elements
 
 | # | Task | Effort | Status |
 |---|------|--------|--------|
-| 1A | Add `hooks.use_layout()` and `hooks.use_width_constraint()` | Low | Pending |
-| 1B | Detect hooks parameter by type (`&mut Hooks<T>`) instead of name | Low | Pending |
-| 1C | Support `initial_state` in `#[component]` (attribute or hook) | Low-Medium | Pending |
+| 1A | Add `hooks.use_layout()` and `hooks.use_width_constraint()` | Low | Done |
+| 1B | Detect hooks parameter by type (`&mut Hooks<T>`) instead of name | Low | Done |
+| 1C | Support `initial_state` in `#[component]` (attribute or hook) | Low-Medium | Done |
 
 ### Wave 2 — Migrate built-ins to new model
 

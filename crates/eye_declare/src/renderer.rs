@@ -78,6 +78,11 @@ impl Renderer {
     ///
     /// Replaces the component (props) while keeping state intact.
     /// Used by reconciliation and for imperative prop updates.
+    ///
+    /// Note: this resets `layout` and `width_constraint` from the component's
+    /// trait methods. When hooks override these (via `use_layout`/`use_width_constraint`),
+    /// `apply_lifecycle` must be called after this to restore the hook values.
+    /// Every current reconciliation path satisfies this contract.
     pub fn swap_component<C: Component>(&mut self, id: NodeId, component: C) {
         let layout = component.layout();
         let width_constraint = component.width_constraint();
