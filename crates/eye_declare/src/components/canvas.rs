@@ -10,19 +10,21 @@
 //! # Examples
 //!
 //! ```ignore
-//! use eye_declare::Canvas;
+//! use eye_declare::{element, Canvas};
 //! use ratatui_core::{buffer::Buffer, layout::Rect, widgets::Widget};
 //! use ratatui_widgets::paragraph::Paragraph;
 //!
-//! // Simple one-line canvas
-//! let canvas = Canvas::new(|area: Rect, buf: &mut Buffer| {
-//!     Paragraph::new("Hello from Canvas!").render(area, buf);
-//! });
+//! // In element! macro
+//! element! {
+//!     Canvas(render_fn: |area: Rect, buf: &mut Buffer| {
+//!         Paragraph::new("Hello from Canvas!").render(area, buf);
+//!     })
+//! }
 //!
-//! // Canvas with explicit height (skips probe measurement)
-//! let canvas = Canvas::new(|area, buf| {
-//!     // draw a 3-row widget
-//! }).with_height(3);
+//! // With explicit height (skips probe measurement)
+//! element! {
+//!     Canvas(render_fn: |area, buf| { /* draw */ }, height: 3u16)
+//! }
 //! ```
 
 use ratatui_core::{buffer::Buffer, layout::Rect};
@@ -31,12 +33,17 @@ use crate::component::Component;
 
 type RenderFn = Box<dyn Fn(Rect, &mut Buffer) + Send + Sync>;
 
+fn noop_render(_: Rect, _: &mut Buffer) {}
+
 /// A leaf component that renders via a user-provided closure.
 ///
 /// See the [module-level docs](self) for examples.
+#[derive(typed_builder::TypedBuilder)]
 pub struct Canvas {
-    render_fn: RenderFn,
-    height: Option<u16>,
+    #[builder(default = Box::new(noop_render), setter(transform = |f: impl Fn(Rect, &mut Buffer) + Send + Sync + 'static| Box::new(f) as RenderFn))]
+    pub render_fn: RenderFn,
+    #[builder(default, setter(into))]
+    pub height: Option<u16>,
 }
 
 impl Canvas {
