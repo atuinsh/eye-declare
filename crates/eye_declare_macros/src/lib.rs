@@ -45,10 +45,13 @@ use proc_macro::TokenStream;
 ///     })
 /// }
 /// ```
-/// Attribute macro for defining component props with `#[default]` support.
+/// Attribute macro for defining component props with compile-time
+/// required field enforcement.
 ///
-/// Generates a `Default` impl for the struct. Fields with `#[default(expr)]`
-/// use the given expression; other fields use `Default::default()`.
+/// Generates a [`TypedBuilder`] impl for the struct. Fields without
+/// `#[default]` are required — omitting them in `element!` is a compile
+/// error. Fields with `#[default(expr)]` are optional. All setters
+/// accept `impl Into<T>` for ergonomic value passing.
 ///
 /// # Example
 ///
@@ -57,22 +60,18 @@ use proc_macro::TokenStream;
 ///
 /// #[props]
 /// struct CardProps {
-///     pub title: String,
+///     pub title: String,              // required
 ///     #[default(true)]
-///     pub visible: bool,
-///     pub border: Option<BorderType>,
+///     pub visible: bool,              // optional, defaults to true
+///     pub border: Option<BorderType>, // optional, defaults to None
 /// }
 ///
-/// // Generates:
-/// // impl Default for CardProps {
-/// //     fn default() -> Self {
-/// //         Self {
-/// //             title: Default::default(),     // ""
-/// //             visible: true,                 // from #[default]
-/// //             border: Default::default(),    // None
-/// //         }
-/// //     }
-/// // }
+/// // In element! macro:
+/// element! {
+///     CardProps(title: "My Card")           // visible & border use defaults
+///     CardProps(title: "Hidden", visible: false)  // override default
+///     // CardProps(visible: true)           // compile error — title is required
+/// }
 /// ```
 #[proc_macro_attribute]
 pub fn props(_attr: TokenStream, input: TokenStream) -> TokenStream {
@@ -104,8 +103,7 @@ fn element_impl(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::Tok
 ///
 /// - `props = Type` — **required**. The struct that becomes the Component.
 /// - `state = Type` — optional. The component's state type. Defaults to `()`.
-/// - `children = Elements` — optional. Generates `impl_slot_children!`.
-/// - `children = MyChild` — optional. Generates `ChildCollector` with `DataChildren<MyChild>`.
+/// - `children = Elements` — optional. Generates slot children support (`impl_slot_children!`).
 ///
 /// # Example
 ///
