@@ -642,3 +642,291 @@ fn view_nested() {
         output_str
     );
 }
+
+// ---------------------------------------------------------------------------
+// #[props] attribute macro tests
+// ---------------------------------------------------------------------------
+
+mod props_tests {
+    use eye_declare::{
+        Canvas, Component, Elements, InlineRenderer, VStack, View, element, impl_slot_children,
+        props,
+    };
+    use ratatui_core::{buffer::Buffer, layout::Rect, widgets::Widget};
+    use ratatui_widgets::{borders::BorderType, paragraph::Paragraph};
+
+    #[props]
+    struct BadgeProps {
+        pub label: String,
+        #[default(true)]
+        pub visible: bool,
+    }
+
+    impl Component for BadgeProps {
+        type State = ();
+
+        fn view(&self, _state: &(), _children: Elements) -> Elements {
+            if !self.visible {
+                return Elements::new();
+            }
+            let label = self.label.clone();
+            let mut els = Elements::new();
+            els.add(Canvas::new(move |area: Rect, buf: &mut Buffer| {
+                Paragraph::new(label.as_str()).render(area, buf);
+            }));
+            els
+        }
+    }
+
+    #[test]
+    fn props_default_values_work_in_element_macro() {
+        // visible defaults to true via #[default(true)]
+        let els = element! {
+            BadgeProps(label: "hello".to_string())
+        };
+
+        let mut r = InlineRenderer::new(20);
+        let container = r.push(VStack);
+        r.rebuild(container, els);
+
+        let output = r.render();
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(
+            output_str.contains("hello"),
+            "badge should render with default visible=true"
+        );
+    }
+
+    #[test]
+    fn props_override_default() {
+        // Explicitly set visible to false
+        let els = element! {
+            BadgeProps(label: "hidden".to_string(), visible: false)
+        };
+
+        let mut r = InlineRenderer::new(20);
+        let container = r.push(VStack);
+        r.rebuild(container, els);
+
+        let output = r.render();
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(
+            !output_str.contains("hidden"),
+            "badge should not render when visible=false"
+        );
+    }
+
+    #[props]
+    struct CardProps {
+        pub title: String,
+    }
+
+    impl Component for CardProps {
+        type State = ();
+
+        fn view(&self, _state: &(), children: Elements) -> Elements {
+            let mut els = Elements::new();
+            els.add_with_children(
+                View {
+                    border: Some(BorderType::Rounded),
+                    title: Some(self.title.clone()),
+                    ..View::default()
+                },
+                children,
+            );
+            els
+        }
+    }
+
+    impl_slot_children!(CardProps);
+
+    #[test]
+    fn props_with_slot_children() {
+        let els = element! {
+            CardProps(title: "Test Card".to_string()) {
+                "inside"
+            }
+        };
+
+        let mut r = InlineRenderer::new(30);
+        let container = r.push(VStack);
+        r.rebuild(container, els);
+
+        // CardProps wraps children in a bordered View — verify the tree
+        // has the expected structure (CardProps > View > TextBlock)
+        let card_id = r.children(container)[0];
+        let view_id = r.children(card_id)[0];
+        let text_id = r.children(view_id)[0];
+        // Verify the tree depth — child content is inside the border
+        assert_eq!(r.children(container).len(), 1, "one card");
+        assert_eq!(r.children(card_id).len(), 1, "card has one view child");
+        assert_eq!(r.children(view_id).len(), 1, "view has one text child");
+        assert!(r.children(text_id).is_empty(), "text is a leaf");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #[component] attribute macro tests
+// ---------------------------------------------------------------------------
+
+mod component_tests {
+    use eye_declare::{
+        Canvas, Elements, Hooks, InlineRenderer, VStack, View, component, element, props,
+    };
+    use ratatui_core::{buffer::Buffer, layout::Rect, widgets::Widget};
+    use ratatui_widgets::{borders::BorderType, paragraph::Paragraph};
+    use std::time::Duration;
+
+    // --- Stateless component with children ---
+
+    #[props]
+    struct CardProps {
+        title: String,
+        #[default(true)]
+        visible: bool,
+    }
+
+    #[component(props = CardProps, children = Elements)]
+    fn card(props: &CardProps, children: Elements) -> Elements {
+        if !props.visible {
+            return Elements::new();
+        }
+        let mut els = Elements::new();
+        els.add_with_children(
+            View {
+                border: Some(BorderType::Rounded),
+                title: Some(props.title.clone()),
+                ..View::default()
+            },
+            children,
+        );
+        els
+    }
+
+    #[test]
+    fn stateless_component_with_children() {
+        let els = element! {
+            CardProps(title: "Test") {
+                "inside"
+            }
+        };
+
+        let mut r = InlineRenderer::new(30);
+        let container = r.push(VStack);
+        r.rebuild(container, els);
+
+        let card_id = r.children(container)[0];
+        assert_eq!(r.children(card_id).len(), 1, "card has view child");
+    }
+
+    #[test]
+    fn required_prop_enforced() {
+        // title is required (no #[default]) — this compiles because we provide it
+        let els = element! {
+            CardProps(title: "Required") {
+                "body"
+            }
+        };
+        let mut r = InlineRenderer::new(30);
+        let container = r.push(VStack);
+        r.rebuild(container, els);
+        assert_eq!(r.children(container).len(), 1);
+    }
+
+    #[test]
+    fn optional_prop_uses_default() {
+        // visible defaults to true, so card renders
+        let els = element! {
+            CardProps(title: "Visible") {
+                "body"
+            }
+        };
+        let mut r = InlineRenderer::new(30);
+        let container = r.push(VStack);
+        r.rebuild(container, els);
+
+        let card_id = r.children(container)[0];
+        // Card has children (visible=true by default)
+        assert!(!r.children(card_id).is_empty());
+    }
+
+    // --- Stateless leaf component ---
+
+    #[props]
+    struct BadgeProps {
+        label: String,
+    }
+
+    #[component(props = BadgeProps)]
+    fn badge(props: &BadgeProps) -> Elements {
+        let label = props.label.clone();
+        let mut els = Elements::new();
+        els.add(Canvas::new(move |area: Rect, buf: &mut Buffer| {
+            Paragraph::new(label.as_str()).render(area, buf);
+        }));
+        els
+    }
+
+    #[test]
+    fn stateless_leaf_component() {
+        let els = element! {
+            BadgeProps(label: "hello")
+        };
+
+        let mut r = InlineRenderer::new(20);
+        let container = r.push(VStack);
+        r.rebuild(container, els);
+
+        let output = r.render();
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(output_str.contains("hello"));
+    }
+
+    // --- Stateful component with hooks ---
+
+    #[derive(Default)]
+    struct CounterState {
+        count: u32,
+    }
+
+    #[props]
+    struct CounterProps {
+        #[default("Count".to_string())]
+        label: String,
+    }
+
+    #[component(props = CounterProps, state = CounterState)]
+    fn counter(
+        props: &CounterProps,
+        state: &CounterState,
+        hooks: &mut Hooks<CounterState>,
+    ) -> Elements {
+        hooks.use_interval(Duration::from_millis(100), |s| s.count += 1);
+
+        let text = format!("{}: {}", props.label, state.count);
+        let mut els = Elements::new();
+        els.add(Canvas::new(move |area: Rect, buf: &mut Buffer| {
+            Paragraph::new(text.as_str()).render(area, buf);
+        }));
+        els
+    }
+
+    #[test]
+    fn stateful_component_with_hooks() {
+        let els = element! {
+            CounterProps(label: "Items")
+        };
+
+        let mut r = InlineRenderer::new(30);
+        let container = r.push(VStack);
+        r.rebuild(container, els);
+
+        let output = r.render();
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(
+            output_str.contains("Items:") && output_str.contains("0"),
+            "initial render should contain label and count: {}",
+            output_str
+        );
+    }
+}

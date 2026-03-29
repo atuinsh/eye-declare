@@ -45,6 +45,42 @@ use proc_macro::TokenStream;
 ///     })
 /// }
 /// ```
+/// Attribute macro for defining component props with compile-time
+/// required field enforcement.
+///
+/// Generates a [`TypedBuilder`] impl for the struct. Fields without
+/// `#[default]` are required — omitting them in `element!` is a compile
+/// error. Fields with `#[default(expr)]` are optional. All setters
+/// accept `impl Into<T>` for ergonomic value passing.
+///
+/// # Example
+///
+/// ```ignore
+/// use eye_declare::props;
+///
+/// #[props]
+/// struct CardProps {
+///     pub title: String,              // required
+///     #[default(true)]
+///     pub visible: bool,              // optional, defaults to true
+///     pub border: Option<BorderType>, // optional, defaults to None
+/// }
+///
+/// // In element! macro:
+/// element! {
+///     CardProps(title: "My Card")           // visible & border use defaults
+///     CardProps(title: "Hidden", visible: false)  // override default
+///     // CardProps(visible: true)           // compile error — title is required
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn props(_attr: TokenStream, input: TokenStream) -> TokenStream {
+    match props::props_impl(input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
 #[proc_macro]
 pub fn element(input: TokenStream) -> TokenStream {
     match element_impl(input.into()) {
@@ -58,5 +94,61 @@ fn element_impl(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::Tok
     Ok(codegen::generate_elements(&nodes))
 }
 
+/// Attribute macro for defining function components.
+///
+/// Generates a [`Component`] impl for the props type, mapping the function
+/// body to `lifecycle()` (for hooks) and `view()` (for the element tree).
+///
+/// # Attributes
+///
+/// - `props = Type` — **required**. The struct that becomes the Component.
+/// - `state = Type` — optional. The component's state type. Defaults to `()`.
+/// - `children = Elements` — optional. Generates slot children support (`impl_slot_children!`).
+///
+/// # Example
+///
+/// ```ignore
+/// use eye_declare::{component, props, Component, Elements, Hooks, View, Canvas};
+/// use ratatui_widgets::borders::BorderType;
+///
+/// #[props]
+/// struct CardProps {
+///     title: String,
+///     #[default(true)]
+///     visible: bool,
+/// }
+///
+/// #[component(props = CardProps, children = Elements)]
+/// fn card(props: &CardProps, children: Elements) -> Elements {
+///     if !props.visible {
+///         return Elements::new();
+///     }
+///     let mut els = Elements::new();
+///     els.add_with_children(
+///         View { border: Some(BorderType::Rounded),
+///                title: Some(props.title.clone()),
+///                ..View::default() },
+///         children,
+///     );
+///     els
+/// }
+///
+/// // Usage in element! macro:
+/// element! {
+///     Card(title: "My Card") {
+///         "Card content"
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn component(attr: TokenStream, input: TokenStream) -> TokenStream {
+    match component::component_impl(attr.into(), input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
 mod codegen;
+mod component;
 mod parse;
+mod props;

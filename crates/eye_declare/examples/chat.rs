@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use eye_declare::{
-    Application, Canvas, Component, ControlFlow, Elements, Handle, Hooks, Markdown, TextBlock, View,
+    Application, BorderType, Canvas, Cells, ControlFlow, Elements, Handle, Hooks, Markdown,
+    TextBlock, View, component, element, props,
 };
 use ratatui_core::{
     buffer::Buffer,
@@ -67,30 +68,45 @@ enum MessageKind {
 }
 
 // ---------------------------------------------------------------------------
-// InputBox component — bordered text input
+// InputBox component — bordered text input using #[component]
 // ---------------------------------------------------------------------------
 
-#[derive(Default)]
+#[props]
 struct InputBox {
-    pub text: String,
-    pub cursor: usize,
-    pub prompt: String,
+    text: String,
+    #[default(0usize)]
+    cursor: usize,
+    #[default("".to_string())]
+    prompt: String,
 }
 
-impl Component for InputBox {
-    type State = ();
+#[component(props = InputBox)]
+fn input_box(props: &InputBox, hooks: &mut Hooks<()>) -> Elements {
+    hooks.use_autofocus();
+    hooks.use_focusable(true);
 
-    fn lifecycle(&self, hooks: &mut Hooks<Self::State>, _state: &Self::State) {
-        hooks.use_autofocus();
-    }
+    let cursor_pos = props.cursor;
+    hooks.use_cursor(move |area: Rect, _state: &()| {
+        let col = 2 + cursor_pos as u16;
+        if col < area.width.saturating_sub(1) {
+            Some((col, 1))
+        } else {
+            Some((area.width.saturating_sub(2), 1))
+        }
+    });
 
-    fn view(&self, _state: &(), _children: Elements) -> Elements {
-        // Capture owned data for the Canvas closure
-        let text = self.text.clone();
+    let text = props.text.clone();
 
-        let mut view_children = Elements::new();
-        view_children.add(
-            Canvas::new(move |area: Rect, buf: &mut Buffer| {
+    element! {
+        View(
+            border: BorderType::Plain,
+            border_style: Style::default().fg(Color::DarkGray),
+            title: format!(" {} ", props.prompt),
+            title_style: Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            padding_left: Some(Cells(1)),
+            padding_right: Some(Cells(1)),
+        ) {
+            Canvas(render_fn: move |area: Rect, buf: &mut Buffer| {
                 if area.width == 0 || area.height == 0 {
                     return;
                 }
@@ -105,49 +121,8 @@ impl Component for InputBox {
                     Line::from(Span::styled(&text, Style::default().fg(Color::White)))
                 };
                 Paragraph::new(display).render(area, buf);
-            })
-            .with_height(1),
-        );
-
-        let mut els = Elements::new();
-        els.add_with_children(
-            View {
-                border: Some(eye_declare::BorderType::Plain),
-                border_style: Style::default().fg(Color::DarkGray),
-                title: Some(format!(" {} ", self.prompt)),
-                title_style: Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-                padding_left: Some(eye_declare::Cells(1)),
-                padding_right: Some(eye_declare::Cells(1)),
-                ..View::default()
-            },
-            view_children,
-        );
-        els
-    }
-
-    fn is_focusable(&self, _state: &()) -> bool {
-        true
-    }
-
-    fn cursor_position(&self, area: Rect, _state: &()) -> Option<(u16, u16)> {
-        // Cursor inside the border, offset by left border + padding
-        let col = 2 + self.cursor as u16;
-        if col < area.width.saturating_sub(1) {
-            Some((col, 1))
-        } else {
-            Some((area.width.saturating_sub(2), 1))
+            }, height: 1u16)
         }
-    }
-
-    fn handle_event(
-        &self,
-        _event: &crossterm::event::Event,
-        _state: &mut eye_declare::Tracked<()>,
-    ) -> eye_declare::EventResult {
-        // Events handled by the app handler, not here
-        eye_declare::EventResult::Ignored
     }
 }
 
@@ -156,35 +131,36 @@ impl Component for InputBox {
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
-struct StreamingDots;
-
-#[derive(Default)]
 struct StreamingDotsState {
     frame: usize,
 }
 
-impl Component for StreamingDots {
-    type State = StreamingDotsState;
+#[props]
+struct StreamingDots {}
 
-    fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
-        let dots = match state.frame % 4 {
-            0 => "   ",
-            1 => ".  ",
-            2 => ".. ",
-            _ => "...",
-        };
-        let line = Line::from(Span::styled(dots, Style::default().fg(Color::DarkGray)));
-        Paragraph::new(line).render(area, buf);
-    }
+#[component(props = StreamingDots, state = StreamingDotsState)]
+fn streaming_dots(
+    _props: &StreamingDots,
+    state: &StreamingDotsState,
+    hooks: &mut Hooks<StreamingDotsState>,
+) -> Elements {
+    hooks.use_interval(Duration::from_millis(300), |s| {
+        s.frame = s.frame.wrapping_add(1);
+    });
 
-    fn initial_state(&self) -> Option<StreamingDotsState> {
-        Some(StreamingDotsState { frame: 0 })
-    }
+    let dots = match state.frame % 4 {
+        0 => "   ",
+        1 => ".  ",
+        2 => ".. ",
+        _ => "...",
+    };
+    let dots = dots.to_string();
 
-    fn lifecycle(&self, hooks: &mut Hooks<StreamingDotsState>, _state: &StreamingDotsState) {
-        hooks.use_interval(Duration::from_millis(300), |s| {
-            s.frame = s.frame.wrapping_add(1);
-        });
+    element! {
+        Canvas(render_fn: move |area: Rect, buf: &mut Buffer| {
+            let line = Line::from(Span::styled(&dots, Style::default().fg(Color::DarkGray)));
+            Paragraph::new(line).render(area, buf);
+        })
     }
 }
 
@@ -193,47 +169,42 @@ impl Component for StreamingDots {
 // ---------------------------------------------------------------------------
 
 fn chat_view(state: &AppState) -> Elements {
-    let mut els = Elements::new();
+    element! {
+        #(for msg in &state.messages {
+            #(message_element(msg))
+        })
 
-    for msg in &state.messages {
-        let key = format!("msg-{}", msg.id);
-        match &msg.kind {
-            MessageKind::User(text) => {
-                els.add(
-                    TextBlock::new().line(
-                        format!("> {}", text),
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                )
-                .key(key);
+        TextBlock()
+
+        InputBox(key: "input", text: state.input.clone(), cursor: state.cursor, prompt: "You")
+    }
+}
+
+fn message_element(msg: &ChatMessage) -> Elements {
+    let key = format!("msg-{}", msg.id);
+    match &msg.kind {
+        MessageKind::User(text) => {
+            element! {
+                TextBlock(key: key, lines: vec![
+                    eye_declare::Line {
+                        spans: vec![eye_declare::Span {
+                            text: format!("> {}", text),
+                            style: Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                        }],
+                    },
+                ])
             }
-            MessageKind::Assistant { content, done } => {
-                if *done {
-                    els.add(Markdown::new(content)).key(key);
-                } else if content.is_empty() {
-                    els.add(StreamingDots).key(key);
-                } else {
-                    // Show content with a blinking cursor
-                    els.add(Markdown::new(format!("{}▌", content))).key(key);
-                }
+        }
+        MessageKind::Assistant { content, done } => {
+            if *done {
+                element! { Markdown(key: key, source: content.clone()) }
+            } else if content.is_empty() {
+                element! { StreamingDots(key: key) }
+            } else {
+                element! { Markdown(key: key, source: format!("{}▌", content)) }
             }
         }
     }
-
-    // Separator
-    els.add(TextBlock::new());
-
-    // Input box
-    els.add(InputBox {
-        text: state.input.clone(),
-        cursor: state.cursor,
-        prompt: "You".into(),
-    })
-    .key("input");
-
-    els
 }
 
 // ---------------------------------------------------------------------------
@@ -271,13 +242,10 @@ const RESPONSES: &[&str] = &[
 ];
 
 async fn stream_response(handle: Handle<AppState>, msg_id: u64) {
-    // Pick a response based on message ID
     let response = RESPONSES[(msg_id / 2) as usize % RESPONSES.len()];
 
-    // Small initial delay (thinking)
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Stream word by word
     let words: Vec<&str> = response
         .split_inclusive(|c: char| c.is_whitespace() || c == '\n')
         .collect();
@@ -290,7 +258,6 @@ async fn stream_response(handle: Handle<AppState>, msg_id: u64) {
                 content.push_str(&w);
             }
         });
-        // Vary speed for natural feel
         let delay = if word.contains('\n') {
             80
         } else {
@@ -299,7 +266,6 @@ async fn stream_response(handle: Handle<AppState>, msg_id: u64) {
         tokio::time::sleep(Duration::from_millis(delay)).await;
     }
 
-    // Mark as done
     handle.update(move |state| {
         if let Some(msg) = state.messages.iter_mut().find(|m| m.id == msg_id)
             && let MessageKind::Assistant { done, .. } = &mut msg.kind
@@ -323,15 +289,8 @@ async fn main() -> io::Result<()> {
         })
         .build()?;
 
-    // Initial build + set focus on the input box
     app.update(|_| {});
     app.flush(&mut io::stdout())?;
-    // Find and focus the input
-    // let renderer = app.renderer();
-    // let container = renderer.children(renderer.root())[0];
-    // if let Some(input_id) = renderer.find_by_key(container, "input") {
-    //     renderer.set_focus(input_id);
-    // }
 
     let h = handle;
     app.run_interactive(move |event, state| {
@@ -342,7 +301,6 @@ async fn main() -> io::Result<()> {
             ..
         }) = event
         {
-            // Ignore Ctrl+key combos (Ctrl+C handled by framework)
             if modifiers.contains(KeyModifiers::CONTROL) {
                 return ControlFlow::Continue;
             }
@@ -368,7 +326,6 @@ async fn main() -> io::Result<()> {
                 }
                 KeyCode::Enter => {
                     if !state.input.is_empty() {
-                        // Add user message
                         let text = std::mem::take(&mut state.input);
                         state.cursor = 0;
                         let user_id = state.next_id();
@@ -377,7 +334,6 @@ async fn main() -> io::Result<()> {
                             kind: MessageKind::User(text),
                         });
 
-                        // Add assistant placeholder
                         let assistant_id = state.next_id();
                         state.messages.push(ChatMessage {
                             id: assistant_id,
@@ -387,7 +343,6 @@ async fn main() -> io::Result<()> {
                             },
                         });
 
-                        // Start streaming
                         let h2 = h.clone();
                         tokio::spawn(async move {
                             stream_response(h2, assistant_id).await;

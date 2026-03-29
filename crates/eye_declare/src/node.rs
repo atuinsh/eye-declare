@@ -149,7 +149,17 @@ impl<C: Component> AnyComponent for C {
             .expect("state type mismatch in lifecycle_erased");
 
         // Phase 1: collect hooks with immutable state reference
-        let (effects, autofocus, focus_scope, provided, consumers) = {
+        let (
+            effects,
+            autofocus,
+            focus_scope,
+            provided,
+            consumers,
+            focusable,
+            cursor_hook,
+            event_hook,
+            capture_hook,
+        ) = {
             let state: &C::State = tracked;
             let mut hooks = Hooks::<C::State>::new();
             self.lifecycle(&mut hooks, state);
@@ -166,6 +176,10 @@ impl<C: Component> AnyComponent for C {
             autofocus,
             focus_scope,
             provided,
+            focusable,
+            cursor_hook,
+            event_hook,
+            capture_hook,
         }
     }
 }
@@ -241,12 +255,70 @@ pub(crate) enum EffectKind {
     OnUnmount,
 }
 
+/// Type-erased event handler declared via hooks.
+pub(crate) trait AnyEventHook: Send + Sync {
+    fn call(
+        &self,
+        event: &crossterm::event::Event,
+        tracked_state: &mut dyn Any,
+    ) -> crate::component::EventResult;
+}
+
+type EventHookFn<S> = Box<
+    dyn Fn(&crossterm::event::Event, &mut Tracked<S>) -> crate::component::EventResult
+        + Send
+        + Sync,
+>;
+
+/// Typed wrapper for a hook-declared event handler.
+pub(crate) struct TypedEventHook<S: 'static> {
+    pub(crate) handler: EventHookFn<S>,
+}
+
+impl<S: Send + Sync + 'static> AnyEventHook for TypedEventHook<S> {
+    fn call(
+        &self,
+        event: &crossterm::event::Event,
+        tracked_state: &mut dyn Any,
+    ) -> crate::component::EventResult {
+        if let Some(tracked) = tracked_state.downcast_mut::<Tracked<S>>() {
+            (self.handler)(event, tracked)
+        } else {
+            crate::component::EventResult::Ignored
+        }
+    }
+}
+
+/// Type-erased cursor position hook.
+pub(crate) trait AnyCursorHook: Send + Sync {
+    fn call(&self, area: Rect, state: &dyn Any) -> Option<(u16, u16)>;
+}
+
+type CursorHookFn<S> = Box<dyn Fn(Rect, &S) -> Option<(u16, u16)> + Send + Sync>;
+
+/// Typed wrapper for a hook-declared cursor position.
+pub(crate) struct TypedCursorHook<S: 'static> {
+    pub(crate) handler: CursorHookFn<S>,
+}
+
+impl<S: Send + Sync + 'static> AnyCursorHook for TypedCursorHook<S> {
+    fn call(&self, area: Rect, state: &dyn Any) -> Option<(u16, u16)> {
+        state
+            .downcast_ref::<S>()
+            .and_then(|s| (self.handler)(area, s))
+    }
+}
+
 /// Output of a lifecycle() call.
 pub(crate) struct LifecycleOutput {
     pub effects: Vec<Effect>,
     pub autofocus: bool,
     pub focus_scope: bool,
     pub provided: Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
+    pub focusable: Option<bool>,
+    pub cursor_hook: Option<Box<dyn AnyCursorHook>>,
+    pub event_hook: Option<Box<dyn AnyEventHook>>,
+    pub capture_hook: Option<Box<dyn AnyEventHook>>,
 }
 
 /// A registered effect for a node.
@@ -285,6 +357,14 @@ pub(crate) struct Node {
     pub autofocus: bool,
     /// Whether this node is a focus scope boundary (Tab cycling trap).
     pub focus_scope: bool,
+    /// Hook-declared focusability (overrides component trait method).
+    pub hook_focusable: Option<bool>,
+    /// Hook-declared cursor position callback.
+    pub hook_cursor: Option<Box<dyn AnyCursorHook>>,
+    /// Hook-declared event handler (bubble phase).
+    pub hook_event: Option<Box<dyn AnyEventHook>>,
+    /// Hook-declared event handler (capture phase).
+    pub hook_capture: Option<Box<dyn AnyEventHook>>,
 }
 
 impl Node {
@@ -308,6 +388,10 @@ impl Node {
             width_constraint: WidthConstraint::default(),
             autofocus: false,
             focus_scope: false,
+            hook_focusable: None,
+            hook_cursor: None,
+            hook_event: None,
+            hook_capture: None,
         }
     }
 
