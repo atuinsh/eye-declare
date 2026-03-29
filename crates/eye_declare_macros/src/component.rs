@@ -76,13 +76,13 @@ impl syn::parse::Parse for ComponentArgs {
 
         let props = props.ok_or_else(|| input.error("#[component] requires `props = Type`"))?;
 
-        if let Some(span) = initial_state_key_span {
-            if state.is_none() {
-                return Err(syn::Error::new(
-                    span,
-                    "#[component] `initial_state` requires `state` to also be specified",
-                ));
-            }
+        if let Some(span) = initial_state_key_span
+            && state.is_none()
+        {
+            return Err(syn::Error::new(
+                span,
+                "#[component] `initial_state` requires `state` to also be specified",
+            ));
         }
 
         Ok(ComponentArgs {
