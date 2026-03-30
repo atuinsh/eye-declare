@@ -38,7 +38,7 @@ struct AppState {
 fn chat_view(state: &AppState) -> Elements {
     element! {
         #(for (i, msg) in state.messages.iter().enumerate() {
-            #(msg.clone())
+            Text(key: format!("msg-{i}")) { Span(text: msg.clone()) }
         })
         #(if state.thinking {
             Spinner(key: "thinking", label: "Thinking...")
