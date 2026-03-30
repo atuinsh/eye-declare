@@ -5,27 +5,31 @@ description: Intervals, mount/unmount effects, and the lifecycle system
 
 # Lifecycle Hooks
 
-Components declare side effects through the `lifecycle()` method. The framework manages registration, execution, and cleanup automatically.
+Components declare side effects through hooks. In `#[component]` functions,
+hooks are declared directly in the function body. The framework manages
+registration, execution, and cleanup automatically.
 
 ## How lifecycle works
 
-The framework calls `lifecycle()` after every build and update. Each call collects a fresh set of effects — the framework clears old effects and installs the new ones. This means effects are always consistent with current props and state.
+The framework calls the component's `update()` method after every build
+and reconciliation. Each call collects a fresh set of effects — the framework
+clears old effects and installs the new ones. This means effects are always
+consistent with current props and state.
 
 ```rust
-impl Component for Timer {
-    type State = TimerState;
-
-    fn lifecycle(&self, hooks: &mut Hooks<TimerState>, _state: &TimerState) {
-        if self.running {
-            hooks.use_interval(Duration::from_secs(1), |s| s.elapsed += 1);
-        }
-        hooks.use_mount(|s| s.started_at = Instant::now());
-        hooks.use_unmount(|s| println!("Timer ran for {:?}", s.started_at.elapsed()));
+#[component(props = Timer, state = TimerState)]
+fn timer(props: &Timer, state: &TimerState, hooks: &mut Hooks<TimerState>) -> Elements {
+    if props.running {
+        hooks.use_interval(Duration::from_secs(1), |s| s.elapsed += 1);
     }
+    hooks.use_mount(|s| s.started_at = Instant::now());
+    hooks.use_unmount(|s| println!("Timer ran for {:?}", s.started_at.elapsed()));
+
+    // ... return element tree
 }
 ```
 
-Notice that the interval is conditional — when `self.running` changes to `false`, the next `lifecycle()` call simply doesn't register the interval, and the framework stops it.
+Notice that the interval is conditional — when `props.running` changes to `false`, the next call simply doesn't register the interval, and the framework stops it.
 
 ## Available hooks
 
@@ -108,12 +112,12 @@ hooks.use_context::<Theme>(|theme, state| {
 
 Here's the full sequence when a component is built or updated:
 
-1. `lifecycle()` is called with a fresh `Hooks` instance
+1. `update()` is called with a fresh `Hooks` instance
 2. The component registers its effects via the hooks API
 3. Old effects are cleared
 4. New effects are installed
 5. `use_mount` fires (only on first build)
-6. `use_context` handlers fire (after `lifecycle()` returns)
+6. `use_context` handlers fire (after `update()` returns)
 
 When a component is removed:
 
@@ -123,12 +127,13 @@ When a component is removed:
 
 ## Conditional effects
 
-Because `lifecycle()` runs on every rebuild, you can conditionally register effects:
+Because the component function runs on every rebuild, you can conditionally register effects:
 
 ```rust
-fn lifecycle(&self, hooks: &mut Hooks<MyState>, state: &MyState) {
+#[component(props = AnimatedWidget, state = AnimState)]
+fn animated_widget(props: &AnimatedWidget, state: &AnimState, hooks: &mut Hooks<AnimState>) -> Elements {
     // Only animate when visible
-    if self.visible {
+    if props.visible {
         hooks.use_interval(Duration::from_millis(100), |s| {
             s.animation_frame += 1;
         });
@@ -137,10 +142,12 @@ fn lifecycle(&self, hooks: &mut Hooks<MyState>, state: &MyState) {
     // Always track mount/unmount
     hooks.use_mount(|s| s.log("mounted"));
     hooks.use_unmount(|s| s.log("unmounted"));
+
+    // ... return element tree
 }
 ```
 
-When `self.visible` changes from `true` to `false`, the interval stops on the next rebuild. When it changes back, a new interval starts.
+When `props.visible` changes from `true` to `false`, the interval stops on the next rebuild. When it changes back, a new interval starts.
 
 ## Example: StatusLog component
 

@@ -74,8 +74,9 @@ Transforms a function into a `Component` impl on the props struct. Attributes:
 |-----------|----------|-------------|
 | `props = Type` | Yes | The props struct (becomes the Component type) |
 | `state = Type` | No | State type, defaults to `()` |
-| `children = Elements` | No | Generates slot children support (`impl_slot_children!`) |
-| `children = MyChild` | No | Generates data children support with `DataChildren<MyChild>` |
+| `initial_state = expr` | No | Custom initial state (requires `state`) |
+| `children = Elements` | No | Slot children: arbitrary element trees from the parent |
+| `children = DataChildren<T>` | No | Data children: typed child collection via `Into<T>` |
 
 ### Function parameters
 
@@ -84,7 +85,8 @@ The function can take these parameters in order:
 1. `props: &PropsType` — the component's props (required)
 2. `state: &StateType` — the component's state (if `state` specified)
 3. `hooks: &mut Hooks<StateType>` — for declaring behavioral hooks (optional)
-4. `children: Elements` — slot children from the parent (if `children` specified)
+4. `children: Elements` — slot children (if `children = Elements`)
+5. `children: &DataChildren<T>` — data children by reference (if `children = DataChildren<T>`)
 
 ### Stateful component with hooks
 
@@ -128,6 +130,9 @@ rather than trait method overrides:
 | `hooks.use_cursor(\|area, state\| ...)` | Position cursor when focused | `cursor_position()` |
 | `hooks.use_event(\|event, state\| ...)` | Handle events (bubble phase) | `handle_event()` |
 | `hooks.use_event_capture(\|event, state\| ...)` | Handle events (capture phase) | `handle_event_capture()` |
+| `hooks.use_layout(Layout::Horizontal)` | Set child layout direction | `layout()` |
+| `hooks.use_width_constraint(Fixed(n))` | Set width in horizontal parent | `width_constraint()` |
+| `hooks.use_height_hint(n)` | Declare fixed height (skip measurement) | `desired_height()` |
 | `hooks.use_autofocus()` | Request focus on mount | — |
 | `hooks.use_interval(dur, \|state\| ...)` | Periodic callback | — |
 | `hooks.use_mount(\|state\| ...)` | Fire on first build | — |
@@ -240,6 +245,58 @@ fn panel(props: &Panel, children: Elements) -> Elements {
 Without `#[component]`, use the `impl_slot_children!` macro on a manual
 Component impl.
 
+## Accepting data children
+
+Data children let a component accept typed children — useful when the
+component needs structured input rather than arbitrary element trees.
+Define a child enum with `From` conversions, then use `children = DataChildren<T>`:
+
+```rust
+use eye_declare::{component, props, Elements, DataChildren, Canvas};
+
+// Child types
+struct Item { label: String, value: String }
+
+enum TableChild { Item(Item) }
+impl From<Item> for TableChild {
+    fn from(item: Item) -> Self { TableChild::Item(item) }
+}
+
+#[props]
+struct Table {
+    title: String,
+}
+
+#[component(props = Table, children = DataChildren<TableChild>)]
+fn table(props: &Table, children: &DataChildren<TableChild>) -> Elements {
+    // children.as_slice() gives &[TableChild]
+    // ... render items
+}
+```
+
+Usage in `element!`:
+
+```rust
+element! {
+    Table(title: "Info") {
+        Item(label: "OS".into(), value: "macOS".into())
+        Item(label: "Rust".into(), value: "1.86".into())
+    }
+}
+```
+
+Data children are collected via `Into<T>` conversions — any type implementing
+`Into<TableChild>` can be used inside the braces. Invalid child types produce
+a compile error.
+
+Components with data children can also be used without braces:
+
+```rust
+element! {
+    Table(title: "Empty")   // gets default empty DataChildren
+}
+```
+
 ## Canvas for raw rendering
 
 `Canvas` is a leaf component for direct buffer access. Use it inside
@@ -288,19 +345,25 @@ impl Component for Badge {
 
 Most user components should use `#[props]` + `#[component]` instead.
 
-## Full Component trait reference
+## Component trait reference
 
-| Method | Default | Purpose |
+The `Component` trait is an implementation detail — `#[component]` generates
+it automatically. Most trait methods are superseded by hooks in function
+components. The only method you might encounter directly is `update()`,
+which `#[component]` overrides to call your function.
+
+| Method | Default | Used by |
 |--------|---------|---------|
-| `view()` | passthrough | Return element tree for this component |
-| `render()` | no-op | Draw into buffer (primitive components only) |
-| `handle_event_capture()` | `Ignored` | Intercept events during capture phase |
-| `handle_event()` | `Ignored` | Handle events during bubble phase |
-| `is_focusable()` | `false` | Participate in Tab cycling |
-| `cursor_position()` | `None` | Position terminal cursor when focused |
-| `initial_state()` | `State::default()` | Custom initial state |
-| `desired_height()` | `None` | Height hint (primitive components only) |
-| `content_inset()` | `Insets::ZERO` | Border/padding inset (primitive components only) |
-| `layout()` | `Vertical` | Child layout direction |
-| `width_constraint()` | `Fill` | Width in horizontal containers |
-| `lifecycle()` | no-op | Declare effects and behavioral hooks |
+| `update()` | chains `lifecycle()` → `view()` | `#[component]` overrides this |
+| `view()` | passthrough | Default `update()` calls this |
+| `lifecycle()` | no-op | Default `update()` calls this |
+| `render()` | no-op | Primitives only (View, Canvas, TextBlock) |
+| `desired_height()` | `None` | Primitives only; use `use_height_hint` |
+| `content_inset()` | `Insets::ZERO` | Primitives only (View) |
+| `handle_event()` | `Ignored` | Use `use_event` hook |
+| `handle_event_capture()` | `Ignored` | Use `use_event_capture` hook |
+| `is_focusable()` | `false` | Use `use_focusable` hook |
+| `cursor_position()` | `None` | Use `use_cursor` hook |
+| `layout()` | `Vertical` | Use `use_layout` hook |
+| `width_constraint()` | `Fill` | Use `use_width_constraint` hook |
+| `initial_state()` | `State::default()` | Use `initial_state = expr` attribute |
