@@ -22,7 +22,7 @@ struct ComponentArgs {
     state: Option<Ident>,
     children: Option<Ident>,
     initial_state: Option<syn::Expr>,
-    crate_path: Option<TokenStream>,
+    crate_path: Option<syn::Path>,
 }
 
 impl syn::parse::Parse for ComponentArgs {
@@ -57,7 +57,7 @@ impl syn::parse::Parse for ComponentArgs {
                     children = Some(value);
                 }
                 "crate_path" => {
-                    let value: TokenStream = input.parse()?;
+                    let value: syn::Path = input.parse()?;
                     crate_path = Some(value);
                 }
                 other => {

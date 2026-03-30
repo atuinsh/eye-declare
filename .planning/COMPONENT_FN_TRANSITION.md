@@ -99,9 +99,9 @@ Old: struct + `impl_slot_children!` macro. New: `#[component(children = Elements
 
 | # | Task | Effort | Status |
 |---|------|--------|--------|
-| 2A | Convert VStack/HStack/Column to `#[component]` | Low | In Progress |
-| 2B | Convert Spinner to `#[component]` (returns Canvas element) | Medium | In Progress |
-| 2C | Convert Markdown to `#[component]` (returns Canvas element) | Medium | In Progress |
+| 2A | Convert VStack/HStack/Column to `#[component]` | Low | Done |
+| 2B | Convert Spinner to `#[component]` (returns Canvas element) | Medium | Done |
+| 2C | Convert Markdown to `#[component]` (returns Canvas element) | Medium | Done |
 | 2D | Keep View as hand-written primitive (fundamental building block) | N/A | Done — kept by design |
 | 2E | Keep Canvas as hand-written primitive (fundamental building block) | N/A | Done — kept by design |
 
@@ -110,7 +110,7 @@ Old: struct + `impl_slot_children!` macro. New: `#[component(children = Elements
 > imperative-render escape hatches that all other components build on. There is no
 > benefit to converting them — they are the foundation, not the target.
 
-> **Blocked**: TextBlock/Line/SSpan require `children = DataChildren<T>` support in
+> **Blocked**: TextBlock/Line/Span require `children = DataChildren<T>` support in
 > `#[component]` (Wave 4B). They use the data children pattern, which the macro
 > does not yet support.
 
