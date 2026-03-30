@@ -257,7 +257,7 @@ fn generate_slot_or_none(
     let update_impl = quote! {
         fn update(
             &self,
-            __hooks: &mut #crate_path::Hooks<Self::State>,
+            __hooks: &mut #crate_path::Hooks<Self, Self::State>,
             __state: &Self::State,
             __children: #crate_path::Elements,
         ) -> #crate_path::Elements {
@@ -356,7 +356,7 @@ fn generate_data_children(
 
             fn update(
                 &self,
-                __hooks: &mut #crate_path::Hooks<Self::State>,
+                __hooks: &mut #crate_path::Hooks<Self, Self::State>,
                 __state: &Self::State,
                 __children: #crate_path::Elements,
             ) -> #crate_path::Elements {
@@ -375,8 +375,18 @@ fn generate_data_children(
         // Component impl on wrapper: for usage with data children.
         // initial_state delegates to the inner props to avoid self-reference
         // issues (self here is the wrapper, not the props struct).
+        //
+        // props_as_any returns the inner props (not self) so hook callbacks
+        // can downcast to the actual props type.
+        //
+        // update() receives Hooks<Self, State> (Self = wrapper) but the user
+        // function expects Hooks<Props, State>. Since Hooks uses P only as
+        // PhantomData, these types have identical layout and the pointer cast
+        // is sound.
         impl #crate_path::Component for #wrapper_name {
             type State = #state_type;
+
+            fn props_as_any(&self) -> &dyn ::std::any::Any { &self.__props }
 
             fn initial_state(&self) -> Option<#state_type> {
                 self.__props.initial_state()
@@ -384,10 +394,16 @@ fn generate_data_children(
 
             fn update(
                 &self,
-                __hooks: &mut #crate_path::Hooks<Self::State>,
+                __hooks: &mut #crate_path::Hooks<Self, Self::State>,
                 __state: &Self::State,
                 __children: #crate_path::Elements,
             ) -> #crate_path::Elements {
+                // SAFETY: Hooks<P, S> uses P only as PhantomData, so
+                // Hooks<Wrapper, S> and Hooks<Props, S> have identical layout.
+                let __hooks: &mut #crate_path::Hooks<#props_type, Self::State> = unsafe {
+                    &mut *(__hooks as *mut #crate_path::Hooks<Self, Self::State>
+                           as *mut #crate_path::Hooks<#props_type, Self::State>)
+                };
                 #wrapper_update_call
             }
         }

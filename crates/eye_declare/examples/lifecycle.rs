@@ -71,10 +71,10 @@ impl Component for StatusLog {
         Some(state)
     }
 
-    fn lifecycle(&self, hooks: &mut Hooks<StatusLogState>, _state: &StatusLogState) {
+    fn lifecycle(&self, hooks: &mut Hooks<Self, StatusLogState>, _state: &StatusLogState) {
         if !self.name.is_empty() {
             let mount_name = self.name.clone();
-            hooks.use_mount(move |state| {
+            hooks.use_mount(move |_props, state| {
                 state.log(
                     format!("  {} mounted", mount_name),
                     Style::default()
@@ -84,7 +84,7 @@ impl Component for StatusLog {
             });
 
             let unmount_name = self.name.clone();
-            hooks.use_unmount(move |state| {
+            hooks.use_unmount(move |_props, state| {
                 state.log(
                     format!("  {} unmounted", unmount_name),
                     Style::default()

@@ -201,7 +201,7 @@ mod tests {
         // The wrapper is a Component — build it and render
         use crate::component::Component;
         let hooks_output = {
-            let mut hooks = Hooks::<()>::new();
+            let mut hooks = Hooks::new();
             let result = wrapper.update(&mut hooks, &(), Elements::new());
             (hooks.decompose(), result)
         };
@@ -231,7 +231,7 @@ mod tests {
         let wrapper = <Text as crate::children::ChildCollector>::finish(Text::default(), collector);
 
         use crate::component::Component;
-        let mut hooks = Hooks::<()>::new();
+        let mut hooks = Hooks::new();
         let elements = wrapper.update(&mut hooks, &(), Elements::new());
         assert!(!elements.is_empty());
     }
@@ -264,7 +264,7 @@ mod tests {
     fn empty_children_produces_no_elements() {
         use crate::component::Component;
         let text = Text::default();
-        let mut hooks = Hooks::<()>::new();
+        let mut hooks = Hooks::new();
         let elements = text.update(&mut hooks, &(), Elements::new());
         assert!(elements.is_empty());
     }

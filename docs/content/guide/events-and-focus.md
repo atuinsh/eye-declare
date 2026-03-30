@@ -147,7 +147,7 @@ In interactive mode (`run_loop()` or `run_interactive()`), Tab and Shift+Tab cyc
 Components can request focus when they mount:
 
 ```rust
-fn lifecycle(&self, hooks: &mut Hooks<Self::State>, _state: &Self::State) {
+fn lifecycle(&self, hooks: &mut Hooks<Self, Self::State>, _state: &Self::State) {
     hooks.use_autofocus();
 }
 ```
@@ -168,7 +168,7 @@ A focus scope confines Tab/Shift-Tab cycling to a subtree of the component tree.
 Mark a component as a focus scope boundary in its `lifecycle()`:
 
 ```rust
-fn lifecycle(&self, hooks: &mut Hooks<Self::State>, _state: &Self::State) {
+fn lifecycle(&self, hooks: &mut Hooks<Self, Self::State>, _state: &Self::State) {
     hooks.use_focus_scope();
 }
 ```
@@ -190,7 +190,7 @@ struct Modal;
 impl Component for Modal {
     type State = ();
 
-    fn lifecycle(&self, hooks: &mut Hooks<()>, _state: &()) {
+    fn lifecycle(&self, hooks: &mut Hooks<Self, ()>, _state: &()) {
         hooks.use_focus_scope();
     }
 

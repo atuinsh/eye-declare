@@ -46,6 +46,8 @@ pub enum WidthConstraint {
 
 /// Type-erased component operations.
 pub(crate) trait AnyComponent: Send + Sync {
+    /// Return the component's props as `&dyn Any` for hook callbacks.
+    fn props_as_any(&self) -> &dyn Any;
     fn render_erased(&self, area: Rect, buf: &mut Buffer, state: &dyn Any);
     fn desired_height_erased(&self, width: u16, state: &dyn Any) -> Option<u16>;
     fn handle_event_capture_erased(
@@ -72,6 +74,10 @@ pub(crate) trait AnyComponent: Send + Sync {
 }
 
 impl<C: Component> AnyComponent for C {
+    fn props_as_any(&self) -> &dyn Any {
+        Component::props_as_any(self)
+    }
+
     fn render_erased(&self, area: Rect, buf: &mut Buffer, state: &dyn Any) {
         let state = state
             .downcast_ref::<C::State>()
@@ -146,14 +152,15 @@ impl<C: Component> AnyComponent for C {
         // Phase 1: call update() with immutable state and fresh hooks
         let (hooks_output, elements) = {
             let state: &C::State = tracked;
-            let mut hooks = Hooks::<C::State>::new();
+            let mut hooks = Hooks::<C, C::State>::new();
             let elements = self.update(&mut hooks, state, children);
             (hooks.decompose(), elements)
         };
 
         // Phase 2: run context consumers with mutable tracked state
+        let props_any: &dyn Any = Component::props_as_any(self);
         for consumer in hooks_output.consumers {
-            consumer(context, tracked);
+            consumer(context, props_any, tracked);
         }
 
         (
@@ -169,6 +176,7 @@ impl<C: Component> AnyComponent for C {
                 layout: hooks_output.layout,
                 width_constraint: hooks_output.width_constraint,
                 height_hint: hooks_output.height_hint,
+                desired_height_hook: hooks_output.desired_height_hook,
             },
             elements,
         )
@@ -212,24 +220,32 @@ impl<S: Send + Sync + 'static> AnyTrackedState for Tracked<S> {
 
 /// Type-erased effect handler. Used for all effect types (interval,
 /// mount, unmount, etc.) since they all share the same callback
-/// signature: `Fn(&mut C::State)`.
+/// signature: `Fn(&P, &mut S)`.
 pub(crate) trait AnyEffectHandler: Send + Sync {
-    fn call(&self, tracked_state: &mut dyn Any);
+    fn call(&self, component: &dyn Any, tracked_state: &mut dyn Any);
 }
 
-/// Typed wrapper that captures a closure operating on `S` and downcasts
-/// the type-erased `Tracked<S>` at call time. `DerefMut` on `Tracked`
+/// Typed wrapper that captures a closure operating on `&P` and `&mut S`
+/// and downcasts both at call time. `DerefMut` on `Tracked`
 /// automatically marks state dirty when the handler fires.
-pub(crate) struct TypedEffectHandler<S: 'static> {
-    pub(crate) handler: Box<dyn Fn(&mut S) + Send + Sync>,
+type EffectHandlerFn<P, S> = Box<dyn Fn(&P, &mut S) + Send + Sync>;
+
+pub(crate) struct TypedEffectHandler<P: 'static, S: 'static> {
+    pub(crate) handler: EffectHandlerFn<P, S>,
 }
 
-impl<S: Send + Sync + 'static> AnyEffectHandler for TypedEffectHandler<S> {
-    fn call(&self, tracked_state: &mut dyn Any) {
-        if let Some(tracked) = tracked_state.downcast_mut::<Tracked<S>>() {
-            use std::ops::DerefMut;
-            (self.handler)(tracked.deref_mut());
-        }
+impl<P: Send + Sync + 'static, S: Send + Sync + 'static> AnyEffectHandler
+    for TypedEffectHandler<P, S>
+{
+    fn call(&self, component: &dyn Any, tracked_state: &mut dyn Any) {
+        let props = component
+            .downcast_ref::<P>()
+            .expect("props type mismatch in effect handler");
+        let tracked = tracked_state
+            .downcast_mut::<Tracked<S>>()
+            .expect("state type mismatch in effect handler");
+        use std::ops::DerefMut;
+        (self.handler)(props, tracked.deref_mut());
     }
 }
 
@@ -251,52 +267,86 @@ pub(crate) trait AnyEventHook: Send + Sync {
     fn call(
         &self,
         event: &crossterm::event::Event,
+        component: &dyn Any,
         tracked_state: &mut dyn Any,
     ) -> crate::component::EventResult;
 }
 
-type EventHookFn<S> = Box<
-    dyn Fn(&crossterm::event::Event, &mut Tracked<S>) -> crate::component::EventResult
+type EventHookFn<P, S> = Box<
+    dyn Fn(&crossterm::event::Event, &P, &mut Tracked<S>) -> crate::component::EventResult
         + Send
         + Sync,
 >;
 
 /// Typed wrapper for a hook-declared event handler.
-pub(crate) struct TypedEventHook<S: 'static> {
-    pub(crate) handler: EventHookFn<S>,
+pub(crate) struct TypedEventHook<P: 'static, S: 'static> {
+    pub(crate) handler: EventHookFn<P, S>,
 }
 
-impl<S: Send + Sync + 'static> AnyEventHook for TypedEventHook<S> {
+impl<P: Send + Sync + 'static, S: Send + Sync + 'static> AnyEventHook for TypedEventHook<P, S> {
     fn call(
         &self,
         event: &crossterm::event::Event,
+        component: &dyn Any,
         tracked_state: &mut dyn Any,
     ) -> crate::component::EventResult {
-        if let Some(tracked) = tracked_state.downcast_mut::<Tracked<S>>() {
-            (self.handler)(event, tracked)
-        } else {
-            crate::component::EventResult::Ignored
-        }
+        let props = component
+            .downcast_ref::<P>()
+            .expect("props type mismatch in event hook");
+        let tracked = tracked_state
+            .downcast_mut::<Tracked<S>>()
+            .expect("state type mismatch in event hook");
+        (self.handler)(event, props, tracked)
     }
 }
 
 /// Type-erased cursor position hook.
 pub(crate) trait AnyCursorHook: Send + Sync {
-    fn call(&self, area: Rect, state: &dyn Any) -> Option<(u16, u16)>;
+    fn call(&self, area: Rect, component: &dyn Any, state: &dyn Any) -> Option<(u16, u16)>;
 }
 
-type CursorHookFn<S> = Box<dyn Fn(Rect, &S) -> Option<(u16, u16)> + Send + Sync>;
+type CursorHookFn<P, S> = Box<dyn Fn(Rect, &P, &S) -> Option<(u16, u16)> + Send + Sync>;
 
 /// Typed wrapper for a hook-declared cursor position.
-pub(crate) struct TypedCursorHook<S: 'static> {
-    pub(crate) handler: CursorHookFn<S>,
+pub(crate) struct TypedCursorHook<P: 'static, S: 'static> {
+    pub(crate) handler: CursorHookFn<P, S>,
 }
 
-impl<S: Send + Sync + 'static> AnyCursorHook for TypedCursorHook<S> {
-    fn call(&self, area: Rect, state: &dyn Any) -> Option<(u16, u16)> {
-        state
+impl<P: Send + Sync + 'static, S: Send + Sync + 'static> AnyCursorHook for TypedCursorHook<P, S> {
+    fn call(&self, area: Rect, component: &dyn Any, state: &dyn Any) -> Option<(u16, u16)> {
+        let props = component
+            .downcast_ref::<P>()
+            .expect("props type mismatch in cursor hook");
+        let state = state
             .downcast_ref::<S>()
-            .and_then(|s| (self.handler)(area, s))
+            .expect("state type mismatch in cursor hook");
+        (self.handler)(area, props, state)
+    }
+}
+
+/// Type-erased desired height hook.
+pub(crate) trait AnyDesiredHeightHook: Send + Sync {
+    fn call(&self, width: u16, component: &dyn Any, state: &dyn Any) -> Option<u16>;
+}
+
+type DesiredHeightHookFn<P, S> = Box<dyn Fn(u16, &P, &S) -> Option<u16> + Send + Sync>;
+
+/// Typed wrapper for a hook-declared desired height callback.
+pub(crate) struct TypedDesiredHeightHook<P: 'static, S: 'static> {
+    pub(crate) handler: DesiredHeightHookFn<P, S>,
+}
+
+impl<P: Send + Sync + 'static, S: Send + Sync + 'static> AnyDesiredHeightHook
+    for TypedDesiredHeightHook<P, S>
+{
+    fn call(&self, width: u16, component: &dyn Any, state: &dyn Any) -> Option<u16> {
+        let props = component
+            .downcast_ref::<P>()
+            .expect("props type mismatch in desired_height hook");
+        let state = state
+            .downcast_ref::<S>()
+            .expect("state type mismatch in desired_height hook");
+        (self.handler)(width, props, state)
     }
 }
 
@@ -313,6 +363,7 @@ pub(crate) struct LifecycleOutput {
     pub layout: Option<Layout>,
     pub width_constraint: Option<WidthConstraint>,
     pub height_hint: Option<u16>,
+    pub desired_height_hook: Option<Box<dyn AnyDesiredHeightHook>>,
 }
 
 /// A registered effect for a node.
@@ -361,6 +412,9 @@ pub(crate) struct Node {
     pub hook_capture: Option<Box<dyn AnyEventHook>>,
     /// Hook-declared height hint (overrides component's desired_height).
     pub hook_height_hint: Option<u16>,
+    /// Hook-declared desired height callback (overrides component's desired_height).
+    /// Takes priority over `hook_height_hint` since it's width-aware.
+    pub hook_desired_height: Option<Box<dyn AnyDesiredHeightHook>>,
     /// Whether this node was built with slot children from a parent.
     /// Nodes with slot children cannot be safely re-reconciled without
     /// the parent's element tree, so the pre-render refresh skips them.
@@ -393,6 +447,7 @@ impl Node {
             hook_event: None,
             hook_capture: None,
             hook_height_hint: None,
+            hook_desired_height: None,
             has_slot: false,
         }
     }

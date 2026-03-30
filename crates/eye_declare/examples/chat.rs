@@ -81,12 +81,12 @@ struct InputBox {
 }
 
 #[component(props = InputBox)]
-fn input_box(props: &InputBox, hooks: &mut Hooks<()>) -> Elements {
+fn input_box(props: &InputBox, hooks: &mut Hooks<InputBox, ()>) -> Elements {
     hooks.use_autofocus();
     hooks.use_focusable(true);
 
     let cursor_pos = props.cursor;
-    hooks.use_cursor(move |area: Rect, _state: &()| {
+    hooks.use_cursor(move |area: Rect, _props: &InputBox, _state: &()| {
         let col = 2 + cursor_pos as u16;
         if col < area.width.saturating_sub(1) {
             Some((col, 1))
@@ -145,9 +145,9 @@ struct StreamingDots {}
 fn streaming_dots(
     _props: &StreamingDots,
     state: &StreamingDotsState,
-    hooks: &mut Hooks<StreamingDotsState>,
+    hooks: &mut Hooks<StreamingDots, StreamingDotsState>,
 ) -> Elements {
-    hooks.use_interval(Duration::from_millis(300), |s| {
+    hooks.use_interval(Duration::from_millis(300), |_props, s| {
         s.frame = s.frame.wrapping_add(1);
     });
 

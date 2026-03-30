@@ -174,9 +174,13 @@ impl Default for SpinnerState {
 }
 
 #[eye_declare_macros::component(props = Spinner, state = SpinnerState, initial_state = SpinnerState::new(), crate_path = crate)]
-fn spinner(props: &Spinner, state: &SpinnerState, hooks: &mut Hooks<SpinnerState>) -> Elements {
+fn spinner(
+    props: &Spinner,
+    state: &SpinnerState,
+    hooks: &mut Hooks<Spinner, SpinnerState>,
+) -> Elements {
     if !props.done {
-        hooks.use_interval(Duration::from_millis(80), |s| s.tick());
+        hooks.use_interval(Duration::from_millis(80), |_props, s| s.tick());
     }
 
     let line = props.build_line(state.frame);

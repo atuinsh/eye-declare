@@ -30,7 +30,7 @@ Components provide context to their descendants via `provide_context` in `lifecy
 impl Component for ThemeProvider {
     type State = ();
 
-    fn lifecycle(&self, hooks: &mut Hooks<()>, _state: &()) {
+    fn lifecycle(&self, hooks: &mut Hooks<Self, ()>, _state: &()) {
         hooks.provide_context(self.theme.clone());
     }
 
@@ -50,8 +50,8 @@ Components read context values with `use_context`:
 impl Component for ThemedButton {
     type State = ButtonState;
 
-    fn lifecycle(&self, hooks: &mut Hooks<ButtonState>, _state: &ButtonState) {
-        hooks.use_context::<Theme>(|theme, state| {
+    fn lifecycle(&self, hooks: &mut Hooks<Self, ButtonState>, _state: &ButtonState) {
+        hooks.use_context::<Theme>(|theme, _props, state| {
             if let Some(t) = theme {
                 state.fg_color = t.primary_color;
                 state.bg_color = t.background_color;
@@ -63,6 +63,7 @@ impl Component for ThemedButton {
 
 The handler receives:
 - `Option<&T>` — the context value, or `None` if no ancestor provides type `T`
+- `&P` — the component's props
 - `&mut Tracked<S>` — the component's mutable tracked state
 
 The handler **always fires** — even when no ancestor provides the type. Use the `Option` to handle the absent case gracefully.
@@ -112,8 +113,8 @@ let (mut app, handle) = Application::builder()
     .build()?;
 
 // In any component
-fn lifecycle(&self, hooks: &mut Hooks<MyState>, _state: &MyState) {
-    hooks.use_context::<UnboundedSender<AppEvent>>(|sender, state| {
+fn lifecycle(&self, hooks: &mut Hooks<Self, MyState>, _state: &MyState) {
+    hooks.use_context::<UnboundedSender<AppEvent>>(|sender, _props, state| {
         state.event_tx = sender.cloned();
     });
 }
@@ -142,7 +143,7 @@ struct AppConfig {
 .with_context(AppConfig { debug_mode: true, max_items: 100 })
 
 // Read anywhere
-hooks.use_context::<AppConfig>(|config, state| {
+hooks.use_context::<AppConfig>(|config, _props, state| {
     if let Some(c) = config {
         state.show_debug = c.debug_mode;
     }

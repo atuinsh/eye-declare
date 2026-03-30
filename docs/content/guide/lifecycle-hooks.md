@@ -18,12 +18,12 @@ consistent with current props and state.
 
 ```rust
 #[component(props = Timer, state = TimerState)]
-fn timer(props: &Timer, state: &TimerState, hooks: &mut Hooks<TimerState>) -> Elements {
+fn timer(props: &Timer, state: &TimerState, hooks: &mut Hooks<Timer, TimerState>) -> Elements {
     if props.running {
-        hooks.use_interval(Duration::from_secs(1), |s| s.elapsed += 1);
+        hooks.use_interval(Duration::from_secs(1), |_props, s| s.elapsed += 1);
     }
-    hooks.use_mount(|s| s.started_at = Instant::now());
-    hooks.use_unmount(|s| println!("Timer ran for {:?}", s.started_at.elapsed()));
+    hooks.use_mount(|_props, s| s.started_at = Instant::now());
+    hooks.use_unmount(|_props, s| println!("Timer ran for {:?}", s.started_at.elapsed()));
 
     // ... return element tree
 }
@@ -38,37 +38,37 @@ Notice that the interval is conditional — when `props.running` changes to `fal
 Fires periodically at the given duration during the framework's tick cycle:
 
 ```rust
-hooks.use_interval(Duration::from_millis(80), |state| {
+hooks.use_interval(Duration::from_millis(80), |_props, state| {
     state.frame = state.frame.wrapping_add(1);
 });
 ```
 
-The handler receives `&mut State` — any mutation automatically marks the component dirty for re-rendering. This is how the built-in `Spinner` animates: it registers an 80ms interval that cycles through Braille frames.
+The handler receives `&P` (props) and `&mut State` — any mutation to state automatically marks the component dirty for re-rendering. This is how the built-in `Spinner` animates: it registers an 80ms interval that cycles through Braille frames.
 
 ### use_mount
 
 Fires once after the component is first built:
 
 ```rust
-hooks.use_mount(|state| {
+hooks.use_mount(|_props, state| {
     state.created_at = Instant::now();
     state.entries.push("Component mounted".into());
 });
 ```
 
-Use this for one-time initialization that depends on state being available.
+The handler receives `&P` (props) and `&mut State`. Use this for one-time initialization that depends on state being available.
 
 ### use_unmount
 
 Fires once when the component is removed from the tree:
 
 ```rust
-hooks.use_unmount(|state| {
+hooks.use_unmount(|_props, state| {
     println!("Component lived for {:?}", state.created_at.elapsed());
 });
 ```
 
-Use this for cleanup: logging, recording metrics, etc. Note that the handler receives `&mut State` — you can still read state during unmount.
+Use this for cleanup: logging, recording metrics, etc. Note that the handler receives `&P` (props) and `&mut State` — you can still read state during unmount.
 
 ### use_autofocus
 
@@ -103,7 +103,7 @@ hooks.provide_context(self.theme.clone());
 Reads a value provided by an ancestor. See [Context](context.md) for details:
 
 ```rust
-hooks.use_context::<Theme>(|theme, state| {
+hooks.use_context::<Theme>(|theme, _props, state| {
     state.current_theme = theme.cloned();
 });
 ```
@@ -131,17 +131,17 @@ Because the component function runs on every rebuild, you can conditionally regi
 
 ```rust
 #[component(props = AnimatedWidget, state = AnimState)]
-fn animated_widget(props: &AnimatedWidget, state: &AnimState, hooks: &mut Hooks<AnimState>) -> Elements {
+fn animated_widget(props: &AnimatedWidget, state: &AnimState, hooks: &mut Hooks<AnimatedWidget, AnimState>) -> Elements {
     // Only animate when visible
     if props.visible {
-        hooks.use_interval(Duration::from_millis(100), |s| {
+        hooks.use_interval(Duration::from_millis(100), |_props, s| {
             s.animation_frame += 1;
         });
     }
 
     // Always track mount/unmount
-    hooks.use_mount(|s| s.log("mounted"));
-    hooks.use_unmount(|s| s.log("unmounted"));
+    hooks.use_mount(|_props, s| s.log("mounted"));
+    hooks.use_unmount(|_props, s| s.log("unmounted"));
 
     // ... return element tree
 }
@@ -175,9 +175,9 @@ impl Component for StatusLog {
         Some(state)
     }
 
-    fn lifecycle(&self, hooks: &mut Hooks<StatusLogState>, _state: &StatusLogState) {
+    fn lifecycle(&self, hooks: &mut Hooks<Self, StatusLogState>, _state: &StatusLogState) {
         let mount_name = self.name.clone();
-        hooks.use_mount(move |state| {
+        hooks.use_mount(move |_props, state| {
             state.entries.push((
                 format!("  {} mounted", mount_name),
                 Style::default().fg(Color::Green),
@@ -185,7 +185,7 @@ impl Component for StatusLog {
         });
 
         let unmount_name = self.name.clone();
-        hooks.use_unmount(move |state| {
+        hooks.use_unmount(move |_props, state| {
             state.entries.push((
                 format!("  {} unmounted", unmount_name),
                 Style::default().fg(Color::Red),
@@ -220,7 +220,7 @@ hooks.use_focusable(true);
 Declares where to position the terminal cursor when this component has focus:
 
 ```rust
-hooks.use_cursor(|area: Rect, state: &MyState| {
+hooks.use_cursor(|area: Rect, _props: &MyProps, state: &MyState| {
     Some((area.x + state.cursor_col, area.y))
 });
 ```
@@ -232,7 +232,7 @@ Return `None` to hide the cursor.
 Declares a bubble-phase event handler (focused → root):
 
 ```rust
-hooks.use_event(|event: &crossterm::event::Event, state: &mut MyState| {
+hooks.use_event(|event: &crossterm::event::Event, _props: &MyProps, state: &mut MyState| {
     if let Event::Key(key) = event {
         state.handle_key(key);
         EventResult::Consumed
@@ -249,7 +249,7 @@ the bubble phase — return `Consumed` to prevent the event from reaching
 the focused component:
 
 ```rust
-hooks.use_event_capture(|event, state: &mut MyState| {
+hooks.use_event_capture(|event, _props: &MyProps, state: &mut MyState| {
     // Global shortcut handling
     EventResult::Ignored
 });
@@ -259,14 +259,16 @@ hooks.use_event_capture(|event, state: &mut MyState| {
 
 | Hook | Purpose | Receives |
 |------|---------|----------|
-| `use_interval(duration, handler)` | Periodic callback | `&mut State` |
-| `use_mount(handler)` | Fire on first build | `&mut State` |
-| `use_unmount(handler)` | Fire on removal | `&mut State` |
+| `use_interval(duration, handler)` | Periodic callback | `&P, &mut State` |
+| `use_mount(handler)` | Fire on first build | `&P, &mut State` |
+| `use_unmount(handler)` | Fire on removal | `&P, &mut State` |
 | `use_autofocus()` | Request focus on mount | — |
 | `use_focus_scope()` | Create focus scope boundary | — |
 | `use_focusable(bool)` | Participate in Tab cycling | — |
-| `use_cursor(handler)` | Position cursor when focused | `Rect, &State` → `Option<(u16, u16)>` |
-| `use_event(handler)` | Handle events (bubble phase) | `&Event, &mut State` → `EventResult` |
-| `use_event_capture(handler)` | Handle events (capture phase) | `&Event, &mut State` → `EventResult` |
+| `use_cursor(handler)` | Position cursor when focused | `Rect, &P, &State` → `Option<(u16, u16)>` |
+| `use_event(handler)` | Handle events (bubble phase) | `&Event, &P, &mut State` → `EventResult` |
+| `use_event_capture(handler)` | Handle events (capture phase) | `&Event, &P, &mut State` → `EventResult` |
+| `use_height_hint(height)` | Declare fixed height | — |
+| `use_desired_height(handler)` | Dynamic width-aware height | `u16, &P, &State` → `Option<u16>` |
 | `provide_context(value)` | Make value available to descendants | — |
-| `use_context::<T>(handler)` | Read ancestor context | `Option<&T>, &mut Tracked<S>` |
+| `use_context::<T>(handler)` | Read ancestor context | `Option<&T>, &P, &mut Tracked<S>` |

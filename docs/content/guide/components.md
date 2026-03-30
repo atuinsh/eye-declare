@@ -84,7 +84,7 @@ The function can take these parameters in order:
 
 1. `props: &PropsType` — the component's props (required)
 2. `state: &StateType` — the component's state (if `state` specified)
-3. `hooks: &mut Hooks<StateType>` — for declaring behavioral hooks (optional)
+3. `hooks: &mut Hooks<PropsType, StateType>` — for declaring behavioral hooks (optional)
 4. `children: Elements` — slot children (if `children = Elements`)
 5. `children: &DataChildren<T>` — data children by reference (if `children = DataChildren<T>`)
 
@@ -103,9 +103,9 @@ struct Timer {
 }
 
 #[component(props = Timer, state = TimerState)]
-fn timer(props: &Timer, state: &TimerState, hooks: &mut Hooks<TimerState>) -> Elements {
+fn timer(props: &Timer, state: &TimerState, hooks: &mut Hooks<Timer, TimerState>) -> Elements {
     if props.running {
-        hooks.use_interval(Duration::from_secs(1), |s| s.elapsed += 1);
+        hooks.use_interval(Duration::from_secs(1), |_props, s| s.elapsed += 1);
     }
 
     element! {
@@ -127,16 +127,16 @@ rather than trait method overrides:
 | Hook | Purpose | Equivalent trait method |
 |------|---------|----------------------|
 | `hooks.use_focusable(true)` | Participate in Tab cycling | `is_focusable()` |
-| `hooks.use_cursor(\|area, state\| ...)` | Position cursor when focused | `cursor_position()` |
-| `hooks.use_event(\|event, state\| ...)` | Handle events (bubble phase) | `handle_event()` |
-| `hooks.use_event_capture(\|event, state\| ...)` | Handle events (capture phase) | `handle_event_capture()` |
+| `hooks.use_cursor(\|area, props, state\| ...)` | Position cursor when focused | `cursor_position()` |
+| `hooks.use_event(\|event, props, state\| ...)` | Handle events (bubble phase) | `handle_event()` |
+| `hooks.use_event_capture(\|event, props, state\| ...)` | Handle events (capture phase) | `handle_event_capture()` |
 | `hooks.use_layout(Layout::Horizontal)` | Set child layout direction | `layout()` |
 | `hooks.use_width_constraint(Fixed(n))` | Set width in horizontal parent | `width_constraint()` |
 | `hooks.use_height_hint(n)` | Declare fixed height (skip measurement) | `desired_height()` |
 | `hooks.use_autofocus()` | Request focus on mount | — |
-| `hooks.use_interval(dur, \|state\| ...)` | Periodic callback | — |
-| `hooks.use_mount(\|state\| ...)` | Fire on first build | — |
-| `hooks.use_unmount(\|state\| ...)` | Fire on removal | — |
+| `hooks.use_interval(dur, \|props, state\| ...)` | Periodic callback | — |
+| `hooks.use_mount(\|props, state\| ...)` | Fire on first build | — |
+| `hooks.use_unmount(\|props, state\| ...)` | Fire on removal | — |
 
 ### Example: focusable input with cursor
 
@@ -149,12 +149,12 @@ struct InputBox {
 }
 
 #[component(props = InputBox)]
-fn input_box(props: &InputBox, hooks: &mut Hooks<()>) -> Elements {
+fn input_box(props: &InputBox, hooks: &mut Hooks<InputBox, ()>) -> Elements {
     hooks.use_focusable(true);
     hooks.use_autofocus();
 
     let cursor_pos = props.cursor;
-    hooks.use_cursor(move |area: Rect, _state: &()| {
+    hooks.use_cursor(move |area: Rect, _props: &InputBox, _state: &()| {
         let col = 2 + cursor_pos as u16;
         if col < area.width.saturating_sub(1) {
             Some((col, 1))

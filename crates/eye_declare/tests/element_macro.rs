@@ -864,9 +864,9 @@ mod component_tests {
     fn counter(
         props: &CounterProps,
         state: &CounterState,
-        hooks: &mut Hooks<CounterState>,
+        hooks: &mut Hooks<CounterProps, CounterState>,
     ) -> Elements {
-        hooks.use_interval(Duration::from_millis(100), |s| s.count += 1);
+        hooks.use_interval(Duration::from_millis(100), |_props, s| s.count += 1);
 
         let text = format!("{}: {}", props.label, state.count);
         let mut els = Elements::new();

@@ -1331,8 +1331,12 @@ mod tests {
             }
         }
 
-        fn lifecycle(&self, hooks: &mut crate::hooks::Hooks<Self::State>, _state: &Self::State) {
-            hooks.use_context::<String>(|value, state| {
+        fn lifecycle(
+            &self,
+            hooks: &mut crate::hooks::Hooks<Self, Self::State>,
+            _state: &Self::State,
+        ) {
+            hooks.use_context::<String>(|value, _props, state| {
                 state.value = value.cloned();
             });
         }

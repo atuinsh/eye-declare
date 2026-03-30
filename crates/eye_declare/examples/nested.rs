@@ -29,6 +29,7 @@ struct SpinnerState {
 
 impl Component for Spinner {
     type State = SpinnerState;
+
     fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
         let line = if state.done {
             Line::from(vec![
@@ -74,6 +75,7 @@ struct StreamingState {
 
 impl Component for StreamingText {
     type State = StreamingState;
+
     fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
         let visible: String = state.tokens[..state.revealed].join("");
         let lines: Vec<Line> = visible
@@ -94,6 +96,7 @@ impl Component for StreamingText {
 struct StaticLine;
 impl Component for StaticLine {
     type State = (String, Style);
+
     fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
         Paragraph::new(Line::styled(state.0.as_str(), state.1)).render(area, buf);
     }

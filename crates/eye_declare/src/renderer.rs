@@ -228,7 +228,11 @@ impl Renderer {
             }
             // Hook handler takes priority over trait method
             let result = if let Some(ref hook) = node.hook_capture {
-                hook.call(event, node.state.as_any_mut())
+                hook.call(
+                    event,
+                    node.component.props_as_any(),
+                    node.state.as_any_mut(),
+                )
             } else {
                 let state_any = node.state.as_any_mut();
                 node.component.handle_event_capture_erased(event, state_any)
@@ -246,7 +250,11 @@ impl Renderer {
             }
             // Hook handler takes priority over trait method
             let result = if let Some(ref hook) = node.hook_event {
-                hook.call(event, node.state.as_any_mut())
+                hook.call(
+                    event,
+                    node.component.props_as_any(),
+                    node.state.as_any_mut(),
+                )
             } else {
                 let state_any = node.state.as_any_mut();
                 node.component.handle_event_erased(event, state_any)
@@ -471,8 +479,8 @@ impl Renderer {
         // Remove any existing Interval (one tick per node)
         effects.retain(|e| !matches!(e.kind, EffectKind::Interval { .. }));
         effects.push(Effect {
-            handler: Box::new(TypedEffectHandler {
-                handler: Box::new(handler),
+            handler: Box::new(TypedEffectHandler::<C, C::State> {
+                handler: Box::new(move |_props: &C, state: &mut C::State| handler(state)),
             }),
             kind: EffectKind::Interval {
                 interval,
@@ -501,8 +509,8 @@ impl Renderer {
         handler: impl Fn(&mut C::State) + Send + Sync + 'static,
     ) {
         self.effects.entry(id).or_default().push(Effect {
-            handler: Box::new(TypedEffectHandler {
-                handler: Box::new(handler),
+            handler: Box::new(TypedEffectHandler::<C, C::State> {
+                handler: Box::new(move |_props: &C, state: &mut C::State| handler(state)),
             }),
             kind: EffectKind::OnMount,
         });
@@ -521,8 +529,8 @@ impl Renderer {
         // Replace any existing OnUnmount
         effects.retain(|e| !matches!(e.kind, EffectKind::OnUnmount));
         effects.push(Effect {
-            handler: Box::new(TypedEffectHandler {
-                handler: Box::new(handler),
+            handler: Box::new(TypedEffectHandler::<C, C::State> {
+                handler: Box::new(move |_props: &C, state: &mut C::State| handler(state)),
             }),
             kind: EffectKind::OnUnmount,
         });
@@ -564,7 +572,10 @@ impl Renderer {
             {
                 *last_tick = now;
             }
-            effects[idx].handler.call(self.nodes[id].state.as_any_mut());
+            let node = &mut self.nodes[id];
+            effects[idx]
+                .handler
+                .call(node.component.props_as_any(), node.state.as_any_mut());
             self.effects.insert(id, effects);
         }
 
@@ -596,7 +607,10 @@ impl Renderer {
 
             // Fire mount handlers
             for effect in mounts {
-                effect.handler.call(self.nodes[id].state.as_any_mut());
+                let node = &mut self.nodes[id];
+                effect
+                    .handler
+                    .call(node.component.props_as_any(), node.state.as_any_mut());
             }
 
             // Reinsert remaining effects (if any)
@@ -614,7 +628,10 @@ impl Renderer {
                 .partition(|e| matches!(e.kind, EffectKind::OnUnmount));
 
             for effect in unmounts {
-                effect.handler.call(self.nodes[id].state.as_any_mut());
+                let node = &mut self.nodes[id];
+                effect
+                    .handler
+                    .call(node.component.props_as_any(), node.state.as_any_mut());
             }
 
             if !remaining.is_empty() {
@@ -794,6 +811,7 @@ impl Renderer {
             self.nodes[id].width_constraint = wc;
         }
         self.nodes[id].hook_height_hint = output.height_hint;
+        self.nodes[id].hook_desired_height = output.desired_height_hook;
 
         // Return Some even when empty if the node already has children,
         // so reconcile_children can tombstone them on transition to empty.
@@ -1036,7 +1054,11 @@ impl Renderer {
             if let Some(layout_rect) = node.layout_rect {
                 // Hook cursor takes priority over trait method
                 let cursor_pos = if let Some(ref hook) = node.hook_cursor {
-                    hook.call(layout_rect, node.state.inner_as_any())
+                    hook.call(
+                        layout_rect,
+                        node.component.props_as_any(),
+                        node.state.inner_as_any(),
+                    )
                 } else {
                     let state = node.state.inner_as_any();
                     node.component.cursor_position_erased(layout_rect, state)
@@ -1069,12 +1091,31 @@ impl Renderer {
             return node.last_height.unwrap_or(0);
         }
 
-        // Hook-declared height hint takes priority over container/leaf measurement
-        // (frozen guard above is the only thing that precedes it).
-        if let Some(h) = node.hook_height_hint {
+        // Check for hook-declared height (dynamic callback or static hint).
+        // For leaf nodes these can return immediately. For containers we
+        // still need to recurse into children so they get measured (their
+        // `last_height` is used by `render_node`), but the hook value
+        // overrides the parent's reported height.
+        let hook_height = if let Some(ref hook) = node.hook_desired_height
+            && let Some(h) = hook.call(
+                width,
+                node.component.props_as_any(),
+                node.state.inner_as_any(),
+            ) {
+            Some(h)
+        } else {
+            node.hook_height_hint
+        };
+
+        if let Some(h) = hook_height
+            && !node.is_container()
+        {
+            // Leaf with hook height — return immediately, no children to measure.
             self.nodes[id].last_height = Some(h);
             return h;
         }
+        // For containers with hook height, fall through to measure children
+        // (they need last_height for render_node), but use the hook value.
 
         let height = if node.is_container() {
             let insets = node
@@ -1105,7 +1146,8 @@ impl Renderer {
                 }
             };
 
-            children_height + insets.vertical()
+            // If a hook height was declared, use it instead of the computed children sum.
+            hook_height.unwrap_or(children_height + insets.vertical())
         } else {
             // Leaf: use desired_height hint if provided, otherwise probe render.
             let needs_measure =
@@ -1207,9 +1249,17 @@ impl Renderer {
             match layout {
                 Layout::Vertical => {
                     let mut y_offset = inner.y;
+                    let y_end = inner.y.saturating_add(inner.height);
                     for child_id in &children {
-                        // Use cached height from measure pass
-                        let child_height = self.nodes[*child_id].last_height.unwrap_or(0);
+                        // Use cached height from measure pass, clamped to remaining space
+                        let remaining = y_end.saturating_sub(y_offset);
+                        if remaining == 0 {
+                            break;
+                        }
+                        let child_height = self.nodes[*child_id]
+                            .last_height
+                            .unwrap_or(0)
+                            .min(remaining);
                         if child_height == 0 {
                             continue;
                         }
@@ -1452,6 +1502,7 @@ mod tests {
         }
         impl Component for TallBlock {
             type State = ();
+
             fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) {
                 for y in 0..(self.lines as u16).min(area.height) {
                     buf.set_string(
@@ -1478,7 +1529,13 @@ mod tests {
         struct FixedHeight;
         impl Component for FixedHeight {
             type State = ();
-            fn update(&self, hooks: &mut Hooks<()>, _state: &(), _children: Elements) -> Elements {
+
+            fn update(
+                &self,
+                hooks: &mut Hooks<Self, ()>,
+                _state: &(),
+                _children: Elements,
+            ) -> Elements {
                 hooks.use_height_hint(3);
                 let mut els = Elements::new();
                 els.add(crate::Canvas::new(|area: Rect, buf: &mut Buffer| {
@@ -2017,7 +2074,7 @@ mod tests {
             Some(())
         }
 
-        fn lifecycle(&self, hooks: &mut Hooks<()>, _state: &()) {
+        fn lifecycle(&self, hooks: &mut Hooks<Self, ()>, _state: &()) {
             hooks.use_focus_scope();
         }
     }
@@ -2041,7 +2098,7 @@ mod tests {
             Some("autofocus-item".to_string())
         }
 
-        fn lifecycle(&self, hooks: &mut Hooks<Self::State>, _state: &Self::State) {
+        fn lifecycle(&self, hooks: &mut Hooks<Self, Self::State>, _state: &Self::State) {
             hooks.use_autofocus();
         }
     }
@@ -2652,6 +2709,7 @@ mod tests {
 
         impl Component for CustomWidget {
             type State = String;
+
             fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
                 let line = ratatui_core::text::Line::raw(state.as_str());
                 ratatui_core::widgets::Widget::render(Paragraph::new(line), area, buf);
@@ -3185,16 +3243,16 @@ mod tests {
             })
         }
 
-        fn lifecycle(&self, hooks: &mut Hooks<LifecycleState>, state: &LifecycleState) {
+        fn lifecycle(&self, hooks: &mut Hooks<Self, LifecycleState>, state: &LifecycleState) {
             let mount_marker = state.mount_marker.clone();
             if !mount_marker.is_empty() {
-                hooks.use_mount(move |s| {
+                hooks.use_mount(move |_props, s| {
                     s.log.push(mount_marker.clone());
                 });
             }
             let unmount_marker = state.unmount_marker.clone();
             if !unmount_marker.is_empty() {
-                hooks.use_unmount(move |s| {
+                hooks.use_unmount(move |_props, s| {
                     s.log.push(unmount_marker.clone());
                 });
             }
@@ -3949,9 +4007,9 @@ mod tests {
             Some((String::new(), 0))
         }
 
-        fn lifecycle(&self, hooks: &mut Hooks<(String, usize)>, state: &(String, usize)) {
+        fn lifecycle(&self, hooks: &mut Hooks<Self, (String, usize)>, state: &(String, usize)) {
             if state.0 != "stop" {
-                hooks.use_interval(Duration::from_millis(1), |s| {
+                hooks.use_interval(Duration::from_millis(1), |_props, s| {
                     s.1 += 1;
                 });
             }
@@ -4047,6 +4105,7 @@ mod tests {
         struct MountTracker;
         impl Component for MountTracker {
             type State = Vec<String>;
+
             fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
                 let text = state.join(",");
                 let line = ratatui_core::text::Line::raw(text);
@@ -4055,9 +4114,9 @@ mod tests {
             fn initial_state(&self) -> Option<Vec<String>> {
                 Some(Vec::new())
             }
-            fn lifecycle(&self, hooks: &mut Hooks<Vec<String>>, _state: &Vec<String>) {
-                hooks.use_mount(|s| s.push("mounted".into()));
-                hooks.use_unmount(|s| s.push("unmounted".into()));
+            fn lifecycle(&self, hooks: &mut Hooks<Self, Vec<String>>, _state: &Vec<String>) {
+                hooks.use_mount(|_props, s| s.push("mounted".into()));
+                hooks.use_unmount(|_props, s| s.push("unmounted".into()));
             }
         }
 
@@ -4102,8 +4161,9 @@ mod tests {
 
     impl Component for ContextProvider {
         type State = ();
+
         fn render(&self, _area: Rect, _buf: &mut Buffer, _state: &()) {}
-        fn lifecycle(&self, hooks: &mut crate::hooks::Hooks<()>, _state: &()) {
+        fn lifecycle(&self, hooks: &mut crate::hooks::Hooks<Self, ()>, _state: &()) {
             hooks.provide_context(self.value.clone());
         }
     }
@@ -4120,6 +4180,7 @@ mod tests {
 
     impl Component for ContextConsumer {
         type State = ContextConsumerState;
+
         fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
             if let Some(ref val) = state.received {
                 let text: Vec<Line> = vec![Line::raw(val.as_str())];
@@ -4127,8 +4188,12 @@ mod tests {
                 ratatui_core::widgets::Widget::render(para, area, buf);
             }
         }
-        fn lifecycle(&self, hooks: &mut crate::hooks::Hooks<Self::State>, _state: &Self::State) {
-            hooks.use_context::<String>(|value, state| {
+        fn lifecycle(
+            &self,
+            hooks: &mut crate::hooks::Hooks<Self, Self::State>,
+            _state: &Self::State,
+        ) {
+            hooks.use_context::<String>(|value, _props, state| {
                 state.received = value.cloned();
             });
         }

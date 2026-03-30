@@ -7,16 +7,16 @@ use ratatui_core::layout::Rect;
 use crate::component::{EventResult, Tracked};
 use crate::context::ContextMap;
 use crate::node::{
-    AnyCursorHook, AnyEventHook, Effect, EffectKind, Layout, TypedCursorHook, TypedEffectHandler,
-    TypedEventHook, WidthConstraint,
+    AnyCursorHook, AnyDesiredHeightHook, AnyEventHook, Effect, EffectKind, Layout, TypedCursorHook,
+    TypedDesiredHeightHook, TypedEffectHandler, TypedEventHook, WidthConstraint,
 };
 
 /// A type-erased context consumer callback.
 ///
 /// Created by [`Hooks::use_context`] and executed by the framework
-/// during reconciliation with the current context map and mutable
-/// tracked state.
-pub(crate) type ConsumerFn<S> = Box<dyn FnOnce(&ContextMap, &mut Tracked<S>) + Send>;
+/// during reconciliation with the current context map, the component's
+/// props (as `&dyn Any`), and mutable tracked state.
+pub(crate) type ConsumerFn<S> = Box<dyn FnOnce(&ContextMap, &dyn Any, &mut Tracked<S>) + Send>;
 
 /// Collected output from a [`Hooks`] instance after decomposition.
 pub(crate) struct HooksOutput<S: 'static> {
@@ -32,6 +32,7 @@ pub(crate) struct HooksOutput<S: 'static> {
     pub layout: Option<Layout>,
     pub width_constraint: Option<WidthConstraint>,
     pub height_hint: Option<u16>,
+    pub desired_height_hook: Option<Box<dyn AnyDesiredHeightHook>>,
 }
 
 /// Effect collector for declarative lifecycle management.
@@ -41,6 +42,11 @@ pub(crate) struct HooksOutput<S: 'static> {
 /// declare effects. The framework calls `lifecycle` after every build
 /// and update, clearing old effects and applying the new set — so
 /// effects are always consistent with current props and state.
+///
+/// The type parameter `P` is the component's props type, and `S` is
+/// the component's state type. Hook callbacks receive `&P` (props)
+/// adjacent to `&mut S` or `&mut Tracked<S>` (state), giving them
+/// access to the component's current props without cloning.
 ///
 /// # Available hooks
 ///
@@ -57,15 +63,15 @@ pub(crate) struct HooksOutput<S: 'static> {
 /// # Example
 ///
 /// ```ignore
-/// fn lifecycle(&self, hooks: &mut Hooks<TimerState>, state: &TimerState) {
+/// fn lifecycle(&self, hooks: &mut Hooks<TimerProps, TimerState>, state: &TimerState) {
 ///     if self.running {
-///         hooks.use_interval(Duration::from_secs(1), |s| s.elapsed += 1);
+///         hooks.use_interval(Duration::from_secs(1), |_props, s| s.elapsed += 1);
 ///     }
-///     hooks.use_mount(|s| s.started_at = Instant::now());
-///     hooks.use_unmount(|s| println!("ran for {:?}", s.started_at.elapsed()));
+///     hooks.use_mount(|_props, s| s.started_at = Instant::now());
+///     hooks.use_unmount(|_props, s| println!("ran for {:?}", s.started_at.elapsed()));
 /// }
 /// ```
-pub struct Hooks<S: 'static> {
+pub struct Hooks<P: 'static, S: 'static> {
     effects: Vec<Effect>,
     autofocus: bool,
     focus_scope: bool,
@@ -78,16 +84,26 @@ pub struct Hooks<S: 'static> {
     layout: Option<Layout>,
     width_constraint: Option<WidthConstraint>,
     height_hint: Option<u16>,
-    _marker: PhantomData<S>,
+    desired_height_hook: Option<Box<dyn AnyDesiredHeightHook>>,
+    // P is used only for type-level constraints on callback signatures.
+    // PhantomData<fn() -> P> makes Hooks covariant in P without affecting layout.
+    _marker: PhantomData<fn() -> P>,
 }
 
-impl<S: Send + Sync + 'static> Default for Hooks<S> {
+// The `#[component]` macro casts `&mut Hooks<Wrapper, S>` to `&mut Hooks<Props, S>`
+// for data-children wrappers. This is sound only because P is phantom. This assertion
+// catches any future change that adds a P-typed field.
+const _: () = {
+    assert!(std::mem::size_of::<Hooks<u8, ()>>() == std::mem::size_of::<Hooks<u64, ()>>(),);
+};
+
+impl<P: Send + Sync + 'static, S: Send + Sync + 'static> Default for Hooks<P, S> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S: Send + Sync + 'static> Hooks<S> {
+impl<P: Send + Sync + 'static, S: Send + Sync + 'static> Hooks<P, S> {
     /// Create a new empty hooks instance.
     pub fn new() -> Self {
         Self {
@@ -103,6 +119,7 @@ impl<S: Send + Sync + 'static> Hooks<S> {
             layout: None,
             width_constraint: None,
             height_hint: None,
+            desired_height_hook: None,
             _marker: PhantomData,
         }
     }
@@ -110,15 +127,16 @@ impl<S: Send + Sync + 'static> Hooks<S> {
     /// Register a periodic interval effect.
     ///
     /// The `handler` is called each time `interval` elapses during
-    /// the framework's tick cycle. The handler receives `&mut State`
-    /// and any mutations automatically mark the component dirty.
+    /// the framework's tick cycle. The handler receives the component's
+    /// current props and `&mut State`; any mutations automatically mark
+    /// the component dirty.
     ///
     /// Commonly used for animations (e.g., the built-in [`Spinner`](crate::Spinner)
     /// uses an 80ms interval to cycle frames).
     pub fn use_interval(
         &mut self,
         interval: Duration,
-        handler: impl Fn(&mut S) + Send + Sync + 'static,
+        handler: impl Fn(&P, &mut S) + Send + Sync + 'static,
     ) {
         self.effects.push(Effect {
             handler: Box::new(TypedEffectHandler {
@@ -135,7 +153,7 @@ impl<S: Send + Sync + 'static> Hooks<S> {
     ///
     /// Use this for one-time initialization that depends on state being
     /// available (e.g., recording a start time, fetching initial data).
-    pub fn use_mount(&mut self, handler: impl Fn(&mut S) + Send + Sync + 'static) {
+    pub fn use_mount(&mut self, handler: impl Fn(&P, &mut S) + Send + Sync + 'static) {
         self.effects.push(Effect {
             handler: Box::new(TypedEffectHandler {
                 handler: Box::new(handler),
@@ -148,7 +166,7 @@ impl<S: Send + Sync + 'static> Hooks<S> {
     /// from the tree.
     ///
     /// Use this for cleanup: logging, cancelling external resources, etc.
-    pub fn use_unmount(&mut self, handler: impl Fn(&mut S) + Send + Sync + 'static) {
+    pub fn use_unmount(&mut self, handler: impl Fn(&P, &mut S) + Send + Sync + 'static) {
         self.effects.push(Effect {
             handler: Box::new(TypedEffectHandler {
                 handler: Box::new(handler),
@@ -185,7 +203,7 @@ impl<S: Send + Sync + 'static> Hooks<S> {
     /// # Example
     ///
     /// ```ignore
-    /// fn lifecycle(&self, hooks: &mut Hooks<MyState>, _state: &MyState) {
+    /// fn lifecycle(&self, hooks: &mut Hooks<Self, MyState>, _state: &MyState) {
     ///     hooks.provide_context(self.event_sender.clone());
     /// }
     /// ```
@@ -196,9 +214,10 @@ impl<S: Send + Sync + 'static> Hooks<S> {
     /// Read a context value provided by an ancestor component.
     ///
     /// The `handler` is called with `Option<&T>` (the context value,
-    /// or `None` if no ancestor provides `T`) and `&mut Tracked<S>`
-    /// (the component's mutable state). The handler always fires —
-    /// use the `Option` to handle the absent case.
+    /// or `None` if no ancestor provides `T`), `&P` (the component's
+    /// current props), and `&mut Tracked<S>` (the component's mutable
+    /// state). The handler always fires — use the `Option` to handle
+    /// the absent case.
     ///
     /// The handler runs during reconciliation, after the component's
     /// `lifecycle` method returns.
@@ -206,23 +225,26 @@ impl<S: Send + Sync + 'static> Hooks<S> {
     /// # Example
     ///
     /// ```ignore
-    /// fn lifecycle(&self, hooks: &mut Hooks<MyState>, _state: &MyState) {
-    ///     hooks.use_context::<Sender<AppEvent>>(|sender, state| {
+    /// fn lifecycle(&self, hooks: &mut Hooks<Self, MyState>, _state: &MyState) {
+    ///     hooks.use_context::<Sender<AppEvent>>(|sender, _props, state| {
     ///         state.tx = sender.cloned();
     ///     });
     /// }
     /// ```
     pub fn use_context<T: Any + Send + Sync + 'static>(
         &mut self,
-        handler: impl FnOnce(Option<&T>, &mut Tracked<S>) + Send + 'static,
+        handler: impl FnOnce(Option<&T>, &P, &mut Tracked<S>) + Send + 'static,
     ) {
         let type_id = TypeId::of::<T>();
         self.consumers.push(Box::new(
-            move |context: &ContextMap, tracked: &mut Tracked<S>| {
+            move |context: &ContextMap, component: &dyn Any, tracked: &mut Tracked<S>| {
+                let props = component
+                    .downcast_ref::<P>()
+                    .expect("props type mismatch in use_context");
                 let value = context
                     .get_by_type_id(type_id)
                     .and_then(|v| v.downcast_ref::<T>());
-                handler(value, tracked);
+                handler(value, props, tracked);
             },
         ));
     }
@@ -243,7 +265,7 @@ impl<S: Send + Sync + 'static> Hooks<S> {
     /// [`cursor_position`](crate::Component::cursor_position) trait method.
     pub fn use_cursor(
         &mut self,
-        handler: impl Fn(Rect, &S) -> Option<(u16, u16)> + Send + Sync + 'static,
+        handler: impl Fn(Rect, &P, &S) -> Option<(u16, u16)> + Send + Sync + 'static,
     ) {
         self.cursor_hook = Some(Box::new(TypedCursorHook {
             handler: Box::new(handler),
@@ -256,11 +278,12 @@ impl<S: Send + Sync + 'static> Hooks<S> {
     /// to stop propagation. This overrides the component's
     /// [`handle_event`](crate::Component::handle_event) trait method.
     ///
-    /// The handler receives `&mut Tracked<S>` — only mutations through
-    /// `DerefMut` mark the component dirty, matching the trait API behavior.
+    /// The handler receives the event, the component's current props,
+    /// and `&mut Tracked<S>` — only mutations through `DerefMut` mark
+    /// the component dirty, matching the trait API behavior.
     pub fn use_event(
         &mut self,
-        handler: impl Fn(&crossterm::event::Event, &mut Tracked<S>) -> EventResult
+        handler: impl Fn(&crossterm::event::Event, &P, &mut Tracked<S>) -> EventResult
         + Send
         + Sync
         + 'static,
@@ -277,7 +300,7 @@ impl<S: Send + Sync + 'static> Hooks<S> {
     /// prevent the event from reaching the focused component.
     pub fn use_event_capture(
         &mut self,
-        handler: impl Fn(&crossterm::event::Event, &mut Tracked<S>) -> EventResult
+        handler: impl Fn(&crossterm::event::Event, &P, &mut Tracked<S>) -> EventResult
         + Send
         + Sync
         + 'static,
@@ -311,6 +334,24 @@ impl<S: Send + Sync + 'static> Hooks<S> {
         self.height_hint = Some(height);
     }
 
+    /// Declare a dynamic height callback for this component.
+    ///
+    /// The handler receives the available width, the component's current
+    /// props, and state, and returns the desired height (or `None` to
+    /// fall back to probe-render measurement).
+    ///
+    /// This takes priority over [`use_height_hint`](Hooks::use_height_hint)
+    /// since it is width-aware. Use `use_height_hint` instead when the
+    /// height is fixed and does not depend on width or state.
+    pub fn use_desired_height(
+        &mut self,
+        handler: impl Fn(u16, &P, &S) -> Option<u16> + Send + Sync + 'static,
+    ) {
+        self.desired_height_hook = Some(Box::new(TypedDesiredHeightHook {
+            handler: Box::new(handler),
+        }));
+    }
+
     /// Consume the hooks, returning effects, provided contexts, and consumers.
     pub(crate) fn decompose(self) -> HooksOutput<S> {
         HooksOutput {
@@ -326,6 +367,7 @@ impl<S: Send + Sync + 'static> Hooks<S> {
             layout: self.layout,
             width_constraint: self.width_constraint,
             height_hint: self.height_hint,
+            desired_height_hook: self.desired_height_hook,
         }
     }
 }
