@@ -1,32 +1,17 @@
 # Component Function Transition Plan
 
-**Status**: In progress
+**Status**: Waves 1–3 complete, wave 4 next
 **Updated**: 2026-03-29
 
 ## Background
 
-eye_declare is transitioning from a struct + `impl Component` model to a `#[component]` fn decorator model. The `#[component]` and `#[props]` macros exist and work for the happy path, but the internals are still structured around the old model. All 9 built-in components still use the old model.
+eye_declare transitioned from a struct + `impl Component` model to a `#[component]` fn decorator model. The `#[component]` and `#[props]` macros are the primary API. All built-in components except TextBlock (blocked on data children) and the two primitives (View, Canvas — by design) use `#[component]`.
 
-**Reference**: `iocraft` is a similar Rust TUI crate with a function-component syntax — may provide useful patterns.
+**Reference**: `iocraft` is a similar Rust TUI crate with a function-component syntax — informed the single-call `update()` design.
 
 ## Current State
 
-### Old Model (struct + impl Component)
-```rust
-#[derive(TypedBuilder)]
-struct Spinner {
-    label: String,
-    done: bool,
-}
-
-impl Component for Spinner {
-    type State = SpinnerState;
-    fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) { ... }
-    fn lifecycle(&self, hooks: &mut Hooks<SpinnerState>, state: &SpinnerState) { ... }
-}
-```
-
-### New Model (#[component] fn)
+### Primary API (#[component] fn)
 ```rust
 #[props]
 struct CardProps {
@@ -46,6 +31,10 @@ fn card(props: &CardProps, children: Elements) -> Elements {
 1. `impl Component for PropsStruct` with `update()` override (combined lifecycle + view)
 2. `impl_slot_children!` if `children = Elements`
 3. The function body is called **once per cycle** via `update()` with real hooks and real children
+
+### Primitives (hand-written impl Component)
+
+View and Canvas are the two framework primitives that implement `Component` directly. They provide the border/inset and imperative-render escape hatches that `#[component]` functions compose with. TextBlock also uses manual impl (blocked on data children support in `#[component]`).
 
 ---
 
@@ -73,48 +62,47 @@ Hooks parameter now detected by type `&mut Hooks<T>`.
 
 ### F6. Two parallel paths for slot children
 
-Old: struct + `impl_slot_children!` macro. New: `#[component(children = Elements)]`.
+Old: struct + `impl_slot_children!` macro. New: `#[component(children = Elements)]`. Both work; the old path is needed for View (primitive) and TextBlock (data children).
 
 ---
 
 ## Roadmap
 
-### Wave 1 — Low-risk enablers (current wave)
+### Wave 1 — Low-risk enablers ✅
 
-| # | Task | Effort | Status |
-|---|------|--------|--------|
-| 1A | Add `hooks.use_layout()` and `hooks.use_width_constraint()` | Low | Done |
-| 1B | Detect hooks parameter by type (`&mut Hooks<T>`) instead of name | Low | Done |
-| 1C | Support `initial_state` in `#[component]` (attribute or hook) | Low-Medium | Done |
+| # | Task | Status |
+|---|------|--------|
+| 1A | Add `hooks.use_layout()` and `hooks.use_width_constraint()` | Done |
+| 1B | Detect hooks parameter by type (`&mut Hooks<T>`) instead of name | Done |
+| 1C | Support `initial_state` in `#[component]` (attribute or hook) | Done |
 
-### Wave 2 — Migrate built-ins to `#[component]` fn model
+### Wave 2 — Migrate built-ins to `#[component]` fn model ✅
 
-| # | Task | Effort | Status |
-|---|------|--------|--------|
-| 2A | Convert VStack/HStack/Column to `#[component]` | Low | Done |
-| 2B | Convert Spinner to `#[component]` (returns Canvas element) | Medium | Done |
-| 2C | Convert Markdown to `#[component]` (returns Canvas element) | Medium | Done |
-| 2D | Keep View as hand-written primitive (fundamental building block) | N/A | Done — kept by design |
-| 2E | Keep Canvas as hand-written primitive (fundamental building block) | N/A | Done — kept by design |
-
-> **Design decision**: View and Canvas are hand-written `impl Component` primitives
-> that `#[component]` functions compose *with*. They provide the border/inset and
-> imperative-render escape hatches that all other components build on. There is no
-> benefit to converting them — they are the foundation, not the target.
+| # | Task | Status |
+|---|------|--------|
+| 2A | Convert VStack/HStack/Column to `#[component]` | Done |
+| 2B | Convert Spinner to `#[component]` (returns Canvas element) | Done |
+| 2C | Convert Markdown to `#[component]` (returns Canvas element) | Done |
+| 2D | Keep View as hand-written primitive (fundamental building block) | Done — kept by design |
+| 2E | Keep Canvas as hand-written primitive (fundamental building block) | Done — kept by design |
 
 > **Blocked**: TextBlock/Line/Span require `children = DataChildren<T>` support in
 > `#[component]` (Wave 4B). They use the data children pattern, which the macro
 > does not yet support.
 
-### Wave 3 — Structural simplification (after migration)
+### Wave 3 — Structural simplification ✅ (3D, 3E deferred)
 
-| # | Task | Effort | Status |
-|---|------|--------|--------|
-| 3A | Unify `render()` and `view()` into a single path | High | Done |
-| 3B | Call function once, not twice — `update()` combines lifecycle + view | High | Done |
-| 3C | Hide legacy trait methods behind `#[doc(hidden)]` | Medium | Done |
-| 3D | Simplify `ChildCollector` / `DataChildren` / `ComponentWithSlot` hierarchy | High | Pending |
-| 3E | Remove struct+impl path entirely; `#[component]` becomes the only way | High | Pending |
+| # | Task | Status |
+|---|------|--------|
+| 3A | Unify `render()` and `view()` — formalize the primitive/component split | Done |
+| 3B | Single-call `update()` — function runs once per cycle, not twice | Done |
+| 3C | Hide legacy trait methods behind `#[doc(hidden)]` | Done |
+| 3D | Simplify `ChildCollector` / `DataChildren` / `ComponentWithSlot` hierarchy | Deferred to 4B |
+| 3E | Make Component trait `#[doc(hidden)]` | Parked — marginal value with 3C done |
+
+**Wave 3 also fixed two bugs from wave 2:**
+- Spinner animation: dirty `#[component]` containers now re-reconcile before render, and Application tick sets dirty when effects fire
+- Spinner builder styles: TypedBuilder field defaults aligned with struct Default (DarkGray/Green)
 
 ### Wave 4 — Future enhancements
 
@@ -125,6 +113,11 @@ Old: struct + `impl_slot_children!` macro. New: `#[component(children = Elements
 | 4C | Typed event emission (`ctx.emit()`) | Medium | Pending |
 | 4D | `use_ref` / imperative handles for parent-to-child state access | Medium | Pending |
 | 4E | Effects / async in components | High | Pending |
+
+**Dependencies:**
+- 4B unblocks: TextBlock migration to `#[component]`, 3D (children hierarchy simplification)
+- 4C unblocks: cleaner component communication (replaces context-channel pattern)
+- 4E depends on: runtime model decisions (per-component vs Application-level async)
 
 ---
 
@@ -146,7 +139,7 @@ Old: struct + `impl_slot_children!` macro. New: `#[component(children = Elements
 
 ## End State Vision
 
-The `Component` trait becomes an internal implementation detail. Users only interact with:
+The `Component` trait is an internal implementation detail. Users interact with:
 
 ```rust
 #[props]
@@ -162,4 +155,4 @@ fn my_component(props: &MyProps, state: &MyState, hooks: &mut Hooks<MyState>, ch
 }
 ```
 
-The trait may be hidden entirely, with `#[component]` being the sole public API for defining components.
+The trait is hidden behind `#[doc(hidden)]` methods (wave 3C). View, Canvas, and TextBlock are the only manual implementors — they are framework primitives, not user-facing patterns.
