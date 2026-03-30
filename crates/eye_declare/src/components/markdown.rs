@@ -6,8 +6,8 @@ use ratatui_core::{
     widgets::Widget,
 };
 
-use crate::components::Canvas;
 use crate::Elements;
+use crate::components::Canvas;
 
 /// Renders a subset of Markdown as styled terminal text.
 ///
@@ -229,7 +229,7 @@ fn parse_inline_formatting(line: &str, styles: &MarkdownState) -> Vec<Span<'stat
             }
         } else if ch == '*' && chars.peek() == Some(&'*') {
             chars.next(); // consume second *
-                          // Flush accumulated plain text
+            // Flush accumulated plain text
             if !current.is_empty() {
                 spans.push(Span::styled(
                     std::mem::take(&mut current),
@@ -302,10 +302,12 @@ mod tests {
         let state = MarkdownState::new();
         let text = render_markdown(&md.source, &state);
         assert_eq!(text.lines.len(), 1);
-        assert!(text.lines[0]
-            .spans
-            .iter()
-            .any(|s| s.content.contains("Title")));
+        assert!(
+            text.lines[0]
+                .spans
+                .iter()
+                .any(|s| s.content.contains("Title"))
+        );
     }
 
     #[test]
