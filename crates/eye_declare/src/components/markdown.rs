@@ -102,10 +102,18 @@ fn markdown(props: &Markdown, state: &MarkdownState) -> Elements {
         return Elements::new();
     }
     let text = render_markdown(&props.source, state);
+    let text_for_height = text.clone();
     let mut els = Elements::new();
-    els.add(Canvas::new(move |area: Rect, buf: &mut Buffer| {
-        crate::wrap::wrapping_paragraph(text.clone()).render(area, buf);
-    }));
+    els.add(
+        Canvas::builder()
+            .render_fn(move |area: Rect, buf: &mut Buffer| {
+                crate::wrap::wrapping_paragraph(text.clone()).render(area, buf);
+            })
+            .desired_height_fn(move |width: u16| {
+                crate::wrap::wrapped_line_count(&text_for_height, width)
+            })
+            .build(),
+    );
     els
 }
 

@@ -177,11 +177,20 @@ fn text(props: &Text, children: &DataChildren<TextChild>) -> Elements {
     }
 
     let line = Arc::new(build_line(spans, props.style));
+    let line_for_height = line.clone();
     let mut els = Elements::new();
-    els.add(Canvas::new(move |area: Rect, buf: &mut Buffer| {
-        let text = ratatui_core::text::Text::from(vec![(*line).clone()]);
-        wrap::wrapping_paragraph(text).render(area, buf);
-    }));
+    els.add(
+        Canvas::builder()
+            .render_fn(move |area: Rect, buf: &mut Buffer| {
+                let text = ratatui_core::text::Text::from(vec![(*line).clone()]);
+                wrap::wrapping_paragraph(text).render(area, buf);
+            })
+            .desired_height_fn(move |width: u16| {
+                let text = ratatui_core::text::Text::from(vec![(*line_for_height).clone()]);
+                wrap::wrapped_line_count(&text, width)
+            })
+            .build(),
+    );
     els
 }
 

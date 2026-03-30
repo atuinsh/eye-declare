@@ -32,6 +32,7 @@ use ratatui_core::{buffer::Buffer, layout::Rect};
 use crate::component::Component;
 
 type RenderFn = Box<dyn Fn(Rect, &mut Buffer) + Send + Sync>;
+type DesiredHeightFn = Box<dyn Fn(u16) -> u16 + Send + Sync>;
 
 fn noop_render(_: Rect, _: &mut Buffer) {}
 
@@ -44,6 +45,10 @@ pub struct Canvas {
     pub render_fn: RenderFn,
     #[builder(default, setter(into))]
     pub height: Option<u16>,
+    /// Width-aware height function. Takes priority over `height`.
+    /// When set, the framework calls this instead of probe rendering.
+    #[builder(default, setter(transform = |f: impl Fn(u16) -> u16 + Send + Sync + 'static| Some(Box::new(f) as DesiredHeightFn)))]
+    pub desired_height_fn: Option<DesiredHeightFn>,
 }
 
 impl Canvas {
@@ -52,6 +57,7 @@ impl Canvas {
         Self {
             render_fn: Box::new(f),
             height: None,
+            desired_height_fn: None,
         }
     }
 
@@ -72,8 +78,12 @@ impl Component for Canvas {
         (self.render_fn)(area, buf);
     }
 
-    fn desired_height(&self, _width: u16, _state: &()) -> Option<u16> {
-        self.height
+    fn desired_height(&self, width: u16, _state: &()) -> Option<u16> {
+        if let Some(ref f) = self.desired_height_fn {
+            Some(f(width))
+        } else {
+            self.height
+        }
     }
 }
 

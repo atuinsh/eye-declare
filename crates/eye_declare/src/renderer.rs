@@ -38,6 +38,9 @@ pub struct Renderer {
     /// `refresh_dirty_containers()`. Avoids an O(n) tree walk on
     /// quiescent frames where no effects mutated state.
     needs_refresh: bool,
+    /// Reusable buffer for probe-render measurement. Avoids allocating
+    /// a fresh buffer for every dirty leaf on every frame.
+    probe_buffer: Option<Buffer>,
 }
 
 impl Renderer {
@@ -57,6 +60,7 @@ impl Renderer {
             effects: HashMap::new(),
             context: ContextMap::new(),
             saved_focus: HashMap::new(),
+            probe_buffer: None,
             needs_refresh: false,
         }
     }
@@ -1174,10 +1178,12 @@ impl Renderer {
                 h
             } else {
                 // Probe render: auto-growing buffer to measure actual content.
+                // Reuse the shared probe buffer to avoid allocating a fresh
+                // buffer for every dirty leaf on every frame.
                 let mut probe_height = INITIAL_PROBE_HEIGHT;
                 loop {
                     let probe_area = Rect::new(0, 0, width, probe_height);
-                    let mut probe_buf = Buffer::empty(probe_area);
+                    let mut probe_buf = self.take_or_alloc_probe(probe_area);
                     let state = self.nodes[id].state.inner_as_any();
                     self.nodes[id]
                         .component
@@ -1199,12 +1205,16 @@ impl Renderer {
                             let mut trimmed = Buffer::empty(trimmed_area);
                             copy_buffer(&probe_buf, &mut trimmed, trimmed_area);
                             self.nodes[id].cached_buffer = Some(trimmed);
+                            // Return the probe buffer for reuse
+                            self.probe_buffer = Some(probe_buf);
                         } else {
                             self.nodes[id].cached_buffer = Some(probe_buf);
                         }
                         self.nodes[id].probe_rendered = true;
                         break h;
                     }
+                    // Need a larger buffer — return this one and try again
+                    self.probe_buffer = Some(probe_buf);
                     probe_height = (probe_height * 2).min(MAX_PROBE_HEIGHT);
                 }
             }
@@ -1383,6 +1393,22 @@ fn allocate_widths(constraints: &[WidthConstraint], total: u16) -> Vec<u16> {
             }
         })
         .collect()
+}
+
+impl Renderer {
+    /// Take the shared probe buffer if it's large enough for the given area,
+    /// or allocate a new one. The buffer is reset (all cells cleared) before
+    /// returning.
+    fn take_or_alloc_probe(&mut self, area: Rect) -> Buffer {
+        if let Some(buf) = self.probe_buffer.take()
+            && *buf.area() == area
+        {
+            let mut buf = buf;
+            buf.reset();
+            return buf;
+        }
+        Buffer::empty(area)
+    }
 }
 
 /// Initial height for leaf probe buffers. Doubled on overflow up to MAX.
