@@ -371,6 +371,10 @@ pub(crate) struct Node {
     pub hook_event: Option<Box<dyn AnyEventHook>>,
     /// Hook-declared event handler (capture phase).
     pub hook_capture: Option<Box<dyn AnyEventHook>>,
+    /// Whether this node was built with slot children from a parent.
+    /// Nodes with slot children cannot be safely re-reconciled without
+    /// the parent's element tree, so the pre-render refresh skips them.
+    pub has_slot: bool,
 }
 
 impl Node {
@@ -398,6 +402,7 @@ impl Node {
             hook_cursor: None,
             hook_event: None,
             hook_capture: None,
+            has_slot: false,
         }
     }
 

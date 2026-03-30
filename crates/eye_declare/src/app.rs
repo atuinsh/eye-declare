@@ -661,7 +661,9 @@ impl<S: Send + 'static> Application<S> {
                     }
                 }
                 _ = tick_interval.tick(), if has_active => {
-                    self.inline.tick();
+                    if self.inline.tick() {
+                        self.dirty = true;
+                    }
                 }
             }
 
@@ -771,7 +773,9 @@ impl<S: Send + 'static> Application<S> {
                 }
 
                 _ = tick_interval.tick(), if has_active => {
-                    self.inline.tick();
+                    if self.inline.tick() {
+                        self.dirty = true;
+                    }
                 }
             }
 

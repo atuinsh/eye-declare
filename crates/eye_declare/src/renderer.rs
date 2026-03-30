@@ -673,6 +673,7 @@ impl Renderer {
                 self.nodes[old_id].parent = Some(parent);
                 self.nodes[old_id].width_constraint =
                     resolve_width_constraint(&self.nodes[old_id], entry.width_constraint);
+                self.nodes[old_id].has_slot = entry.children.is_some();
                 // Guarantee re-render after props update
                 self.nodes[old_id].force_dirty = true;
                 let (provided, resolved) = self.update_node(old_id, entry.children);
@@ -689,6 +690,7 @@ impl Renderer {
                 let id = entry.element.build(self, parent);
                 self.nodes[id].element_type_id = Some(entry.type_id);
                 self.nodes[id].key = entry.key;
+                self.nodes[id].has_slot = entry.children.is_some();
                 self.nodes[id].width_constraint =
                     resolve_width_constraint(&self.nodes[id], entry.width_constraint);
                 let (provided, resolved) = self.update_node(id, entry.children);
@@ -729,6 +731,7 @@ impl Renderer {
             let node_id = entry.element.build(self, parent);
             self.nodes[node_id].element_type_id = Some(entry.type_id);
             self.nodes[node_id].key = entry.key;
+            self.nodes[node_id].has_slot = entry.children.is_some();
             self.nodes[node_id].width_constraint =
                 resolve_width_constraint(&self.nodes[node_id], entry.width_constraint);
             let (provided, resolved) = self.update_node(node_id, entry.children);
@@ -791,6 +794,52 @@ impl Renderer {
         };
 
         (output.provided, elements)
+    }
+
+    /// Re-reconcile dirty container nodes whose element tree depends on
+    /// their own state (not slot children from a parent).
+    ///
+    /// Called before measure/render so that `#[component]` functions that
+    /// produce children based on state (e.g., Spinner returning Canvas)
+    /// get fresh children after state changes from effects.
+    fn refresh_dirty_containers(&mut self) {
+        // Collect IDs of dirty non-slot containers to avoid borrowing
+        // issues during mutation.
+        let dirty: Vec<NodeId> = self.collect_dirty_containers(self.root);
+        for id in dirty {
+            let (provided, resolved) = self.update_node(id, None);
+            let saved = self.push_context(provided);
+            if let Some(els) = resolved {
+                self.reconcile_children(id, els.into_items());
+            }
+            self.pop_context(saved);
+        }
+    }
+
+    /// Collect container nodes that are dirty and safe to re-reconcile.
+    ///
+    /// A node is safe to re-reconcile when:
+    /// - It was built through the element tree (has element_type_id)
+    /// - It has children (is a container)
+    /// - It was NOT built with slot children from a parent
+    /// - It is not frozen
+    /// - Its state is dirty
+    fn collect_dirty_containers(&self, id: NodeId) -> Vec<NodeId> {
+        let mut result = Vec::new();
+        let children: Vec<NodeId> = self.nodes[id].children.clone();
+        for child_id in children {
+            let node = &self.nodes[child_id];
+            if !node.frozen
+                && node.is_container()
+                && node.element_type_id.is_some()
+                && !node.has_slot
+                && node.state.is_dirty()
+            {
+                result.push(child_id);
+            }
+            result.extend(self.collect_dirty_containers(child_id));
+        }
+        result
     }
 
     /// Test helper: run update_node for lifecycle side effects only.
@@ -927,7 +976,14 @@ impl Renderer {
     /// Render the component tree into a Frame.
     ///
     /// Recursively measures and renders from the root.
+    ///
+    /// Before measuring, re-reconciles any dirty container nodes whose
+    /// element tree depends on their own state (not slot children). This
+    /// ensures `#[component]` functions that return Canvas or other
+    /// elements based on state produce fresh children after state changes
+    /// from effects like `use_interval`.
     pub fn render(&mut self) -> Frame {
+        self.refresh_dirty_containers();
         let total_height = self.measure_height(self.root, self.width);
 
         if total_height == 0 || self.width == 0 {
@@ -2974,6 +3030,39 @@ mod tests {
             .key("s");
         r.rebuild(container, els);
         assert!(!r.has_active());
+    }
+
+    #[test]
+    fn spinner_animates_after_tick_without_rebuild() {
+        // After wave 2, Spinner returns a Canvas child. Verify that
+        // tick + render (without explicit rebuild) still shows the
+        // updated animation frame.
+        let mut r = Renderer::new(30);
+        let container = r.push(VStack);
+
+        let mut els = Elements::new();
+        els.add(crate::components::spinner::Spinner::new("Loading..."))
+            .key("s");
+        r.rebuild(container, els);
+
+        // Initial render: frame 0
+        let frame = r.render();
+        let first_symbol = frame.buffer()[(0, 0)].symbol().to_string();
+        assert_eq!(first_symbol, "⠋"); // FRAMES[0]
+
+        // Simulate enough time passing for the interval to fire
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let ticked = r.tick();
+        assert!(ticked, "interval should have fired");
+
+        // Render again without rebuild — refresh_dirty_containers
+        // should re-reconcile the Spinner and produce a new Canvas
+        let frame2 = r.render();
+        let second_symbol = frame2.buffer()[(0, 0)].symbol().to_string();
+        assert_ne!(
+            second_symbol, first_symbol,
+            "spinner should have advanced to a new frame"
+        );
     }
 
     // --- Mount/Unmount lifecycle tests ---
