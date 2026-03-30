@@ -34,6 +34,10 @@ pub struct Renderer {
     /// a scope, the previous focus is saved here so it can be restored
     /// when the scope is removed.
     saved_focus: HashMap<NodeId, Option<NodeId>>,
+    /// Set by `tick()` when any effect fires. Cleared after
+    /// `refresh_dirty_containers()`. Avoids an O(n) tree walk on
+    /// quiescent frames where no effects mutated state.
+    needs_refresh: bool,
 }
 
 impl Renderer {
@@ -53,6 +57,7 @@ impl Renderer {
             effects: HashMap::new(),
             context: ContextMap::new(),
             saved_focus: HashMap::new(),
+            needs_refresh: false,
         }
     }
 
@@ -560,6 +565,7 @@ impl Renderer {
             self.effects.insert(id, effects);
         }
 
+        self.needs_refresh = true;
         true
     }
 
@@ -796,22 +802,31 @@ impl Renderer {
         (output.provided, elements)
     }
 
-    /// Re-reconcile dirty container nodes whose element tree depends on
+    /// Re-reconcile dirty view-based nodes whose element tree depends on
     /// their own state (not slot children from a parent).
     ///
     /// Called before measure/render so that `#[component]` functions that
     /// produce children based on state (e.g., Spinner returning Canvas)
     /// get fresh children after state changes from effects.
     ///
+    /// Short-circuits when no effects have fired since the last render
+    /// (`needs_refresh` flag), avoiding an O(n) tree walk on quiescent
+    /// frames.
+    ///
     /// **Limitation:** ancestor context values are not available during
     /// this pass. Components that combine `use_interval` (or other
     /// state-mutating effects) with `use_context` will see `None` for
     /// context reads here. A full `rebuild()` restores correct context.
-    fn refresh_dirty_containers(&mut self) {
+    fn refresh_dirty_views(&mut self) {
+        if !self.needs_refresh {
+            return;
+        }
+        self.needs_refresh = false;
+
         // Collect in post-order (descendants before ancestors) so that
         // if a parent's re-reconciliation tombstones a child, the child
         // was already processed.
-        let dirty: Vec<NodeId> = self.collect_dirty_containers(self.root);
+        let dirty: Vec<NodeId> = self.collect_dirty_views(self.root);
         for id in dirty {
             // Guard against stale NodeIds: a prior iteration may have
             // tombstoned this node as a side effect of reconciling an
@@ -828,25 +843,24 @@ impl Renderer {
         }
     }
 
-    /// Collect container nodes that are dirty and safe to re-reconcile.
+    /// Collect view-based nodes that are dirty and safe to re-reconcile.
     ///
     /// Returns nodes in **post-order** (descendants before ancestors) so
     /// callers can safely process the list front-to-back without stale IDs.
     ///
-    /// A node is safe to re-reconcile when:
-    /// - It was built through the element tree (has element_type_id)
-    /// - It has children (is a container)
-    /// - It was NOT built with slot children from a parent
-    /// - It is not frozen
-    /// - Its state is dirty
-    fn collect_dirty_containers(&self, id: NodeId) -> Vec<NodeId> {
+    /// A node is safe to re-reconcile when it was built through the
+    /// element tree (has element_type_id), was NOT built with slot
+    /// children from a parent, is not frozen, and its state is dirty.
+    /// The `is_container()` check is intentionally omitted — a component
+    /// that initially produces no children can transition to producing
+    /// children when its state changes.
+    fn collect_dirty_views(&self, id: NodeId) -> Vec<NodeId> {
         let mut result = Vec::new();
         let children: Vec<NodeId> = self.nodes[id].children.clone();
         for child_id in children {
-            result.extend(self.collect_dirty_containers(child_id));
+            result.extend(self.collect_dirty_views(child_id));
             let node = &self.nodes[child_id];
             if !node.frozen
-                && node.is_container()
                 && node.element_type_id.is_some()
                 && !node.has_slot
                 && node.state.is_dirty()
@@ -998,7 +1012,7 @@ impl Renderer {
     /// elements based on state produce fresh children after state changes
     /// from effects like `use_interval`.
     pub fn render(&mut self) -> Frame {
-        self.refresh_dirty_containers();
+        self.refresh_dirty_views();
         let total_height = self.measure_height(self.root, self.width);
 
         if total_height == 0 || self.width == 0 {
