@@ -281,19 +281,23 @@ let (mut app, handle) = Application::builder()
     .build()?;
 ```
 
-**Component-level context** — provide and consume in lifecycle:
+**Component-level context** — provide and consume via hooks:
 
 ```rust
 // Provider: makes a value available to descendants
-fn lifecycle(&self, hooks: &mut Hooks<MyState>, _state: &MyState) {
-    hooks.provide_context(self.theme.clone());
+#[component(props = ThemeProvider, children = Elements)]
+fn theme_provider(props: &ThemeProvider, hooks: &mut Hooks<ThemeProvider, ()>, children: Elements) -> Elements {
+    hooks.provide_context(props.theme.clone());
+    children
 }
 
 // Consumer: reads a value from an ancestor
-fn lifecycle(&self, hooks: &mut Hooks<MyState>, _state: &MyState) {
-    hooks.use_context::<Theme>(|theme, state| {
+#[component(props = ThemedButton, state = ButtonState)]
+fn themed_button(props: &ThemedButton, hooks: &mut Hooks<ThemedButton, ButtonState>) -> Elements {
+    hooks.use_context::<Theme>(|theme, _props, state| {
         state.current_theme = theme.cloned();
     });
+    // ... return element tree
 }
 ```
 

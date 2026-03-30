@@ -96,7 +96,7 @@
 //! The context system lets ancestor components provide values to their
 //! descendants without prop-drilling. Register root-level contexts via
 //! [`ApplicationBuilder::with_context`], or have components provide
-//! them via [`Hooks::provide_context`] in their lifecycle method.
+//! them via [`Hooks::provide_context`] in their component function.
 //! Descendants read context values with [`Hooks::use_context`].
 //!
 //! This is commonly used with [`Application::run_loop`] to give

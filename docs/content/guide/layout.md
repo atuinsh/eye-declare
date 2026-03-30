@@ -78,10 +78,23 @@ The `HStack` height is the maximum measured height of its children. Shorter chil
 
 ## Content insets
 
-Components that draw borders or padding declare `content_inset()` to reserve space around their children:
+Components that draw borders or padding declare `content_inset()` to reserve space around their children. In practice, most user components use the built-in `View` component for borders and padding rather than implementing `content_inset()` directly:
 
 ```rust
-impl Component for Card {
+#[component(props = Card, children = Elements)]
+fn card(props: &Card, children: Elements) -> Elements {
+    element! {
+        View(border: BorderType::Rounded, padding: 1u16) {
+            #(children)
+        }
+    }
+}
+```
+
+For primitive components that need custom chrome, `content_inset()` is available on the `Component` trait:
+
+```rust
+impl Component for MyPrimitive {
     fn content_inset(&self, _state: &()) -> Insets {
         Insets::all(1)
     }
@@ -143,15 +156,10 @@ Footer
 
 ## Width constraints on components
 
-Components can declare their own width constraint by overriding `width_constraint()`:
+Components can declare their own width constraint. In `#[component]` functions, use the `use_width_constraint` hook:
 
 ```rust
-impl Component for Sidebar {
-    fn width_constraint(&self) -> WidthConstraint {
-        WidthConstraint::Fixed(30)
-    }
-    // ...
-}
+hooks.use_width_constraint(WidthConstraint::Fixed(30));
 ```
 
 This is equivalent to wrapping the component in a `Column(width: Fixed(30))` — but more convenient when the width is intrinsic to the component.

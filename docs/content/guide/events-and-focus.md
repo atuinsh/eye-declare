@@ -11,27 +11,34 @@ eye-declare provides an event system for interactive TUIs. Components can handle
 
 Events are dispatched in two phases, similar to the DOM:
 
-1. **Capture** (root → focused): each component's `handle_event_capture()` is called, walking from the root toward the focused component. Returning `Consumed` stops propagation — the event never reaches the focused component or the bubble phase.
+1. **Capture** (root → focused): each component's capture handler is called, walking from the root toward the focused component. Returning `Consumed` stops propagation — the event never reaches the focused component or the bubble phase.
 
-2. **Bubble** (focused → root): each component's `handle_event()` is called, starting at the focused component and walking up to the root. Returning `Consumed` stops propagation.
+2. **Bubble** (focused → root): each component's event handler is called, starting at the focused component and walking up to the root. Returning `Consumed` stops propagation.
 
 The focused component participates in both phases. Frozen components are skipped in both.
 
 Use the capture phase for global shortcuts that should take priority over focused-component handling (e.g., Ctrl+N for "new item" regardless of what's focused). Use the bubble phase for normal input handling.
 
-## Bubble phase: handle_event
+## Bubble phase: use_event
 
-Components handle events during the bubble phase by implementing `handle_event()`:
+Components handle events during the bubble phase with the `use_event` hook:
 
 ```rust
-impl Component for Input {
-    type State = InputState;
+#[props]
+struct Input {
+    #[default(String::new())]
+    text: String,
+}
 
-    fn handle_event(
-        &self,
-        event: &crossterm::event::Event,
-        state: &mut Tracked<Self::State>,
-    ) -> EventResult {
+#[derive(Default)]
+struct InputState {
+    text: String,
+    cursor: usize,
+}
+
+#[component(props = Input, state = InputState)]
+fn input(props: &Input, state: &InputState, hooks: &mut Hooks<Input, InputState>) -> Elements {
+    hooks.use_event(|event, _props, state| {
         if let Event::Key(KeyEvent {
             code,
             kind: KeyEventKind::Press,
@@ -57,7 +64,9 @@ impl Component for Input {
         } else {
             EventResult::Ignored
         }
-    }
+    });
+
+    // ... return element tree
 }
 ```
 
@@ -68,16 +77,12 @@ impl Component for Input {
 
 During bubble, the focused component gets the event first, and if it returns `Ignored`, the parent gets a chance, and so on.
 
-## Capture phase: handle_event_capture
+## Capture phase: use_event_capture
 
-Components can intercept events *before* they reach the focused component by implementing `handle_event_capture()`:
+Components can intercept events *before* they reach the focused component with `use_event_capture`:
 
 ```rust
-fn handle_event_capture(
-    &self,
-    event: &crossterm::event::Event,
-    state: &mut Tracked<Self::State>,
-) -> EventResult {
+hooks.use_event_capture(|event, _props, state| {
     // Intercept Ctrl+N as a global shortcut
     if let Event::Key(KeyEvent {
         code: KeyCode::Char('n'),
@@ -92,7 +97,7 @@ fn handle_event_capture(
         }
     }
     EventResult::Ignored
-}
+});
 ```
 
 This is useful for parent components that define global shortcuts — the focused child doesn't need to know about them or explicitly ignore them.
@@ -104,7 +109,7 @@ State is wrapped in `Tracked` — only mutable access via `DerefMut` marks the c
 **Reading state without marking dirty:** On `&mut Tracked<S>`, Rust's auto-deref uses `DerefMut` for all field access — even reads. Use `state.read()` to get a shared reference that doesn't set the dirty flag:
 
 ```rust
-fn handle_event(&self, event: &Event, state: &mut Tracked<Self::State>) -> EventResult {
+hooks.use_event(|event, _props, state| {
     // state.mode would trigger DerefMut — use read() for a clean read
     if state.read().mode == Mode::Insert {
         state.text.push('a');  // DerefMut → marks dirty
@@ -112,7 +117,7 @@ fn handle_event(&self, event: &Event, state: &mut Tracked<Self::State>) -> Event
     } else {
         EventResult::Ignored  // state stays clean
     }
-}
+});
 ```
 
 This is especially useful for handlers that read state to call methods using interior mutability (e.g., sending on a channel) without triggering unnecessary re-renders.
@@ -130,12 +135,10 @@ KeyCode::Char(c) => {
 
 ## Focus
 
-Components opt into focus by returning `true` from `is_focusable()`:
+Components opt into focus with the `use_focusable` hook:
 
 ```rust
-fn is_focusable(&self, _state: &Self::State) -> bool {
-    true
-}
+hooks.use_focusable(true);
 ```
 
 ### Tab cycling
@@ -147,9 +150,7 @@ In interactive mode (`run_loop()` or `run_interactive()`), Tab and Shift+Tab cyc
 Components can request focus when they mount:
 
 ```rust
-fn lifecycle(&self, hooks: &mut Hooks<Self, Self::State>, _state: &Self::State) {
-    hooks.use_autofocus();
-}
+hooks.use_autofocus();
 ```
 
 ### Programmatic focus
@@ -165,11 +166,23 @@ renderer.set_focus(input_id);
 
 A focus scope confines Tab/Shift-Tab cycling to a subtree of the component tree. This is useful for modals, popups, and nested forms where Tab should not escape the container.
 
-Mark a component as a focus scope boundary in its `lifecycle()`:
+Mark a component as a focus scope boundary:
 
 ```rust
-fn lifecycle(&self, hooks: &mut Hooks<Self, Self::State>, _state: &Self::State) {
+#[props]
+struct Modal {
+    title: String,
+}
+
+#[component(props = Modal, children = Elements)]
+fn modal(props: &Modal, hooks: &mut Hooks<Modal, ()>, children: Elements) -> Elements {
     hooks.use_focus_scope();
+
+    element! {
+        View(border: BorderType::Rounded, title: props.title.clone()) {
+            #(children)
+        }
+    }
 }
 ```
 
@@ -182,39 +195,19 @@ fn lifecycle(&self, hooks: &mut Hooks<Self, Self::State>, _state: &Self::State) 
 - Programmatic `set_focus()` ignores scope boundaries — it always works
 - Event dispatch (capture/bubble) is unaffected by scopes
 
-**Example: modal dialog with trapped focus**
-
-```rust
-struct Modal;
-
-impl Component for Modal {
-    type State = ();
-
-    fn lifecycle(&self, hooks: &mut Hooks<Self, ()>, _state: &()) {
-        hooks.use_focus_scope();
-    }
-
-    fn children(&self, _state: &(), slot: Option<Elements>) -> Option<Elements> {
-        slot
-    }
-
-    // ... render, etc.
-}
-```
-
 Children of `Modal` will have their own Tab cycle — focus won't leak to components outside the modal. When the modal is removed, focus returns to wherever it was before.
 
 ## Cursor position
 
-Focused components can position the terminal's hardware cursor (the blinking cursor):
+Focused components can position the terminal's hardware cursor (the blinking cursor) with `use_cursor`:
 
 ```rust
-fn cursor_position(&self, area: Rect, state: &Self::State) -> Option<(u16, u16)> {
+hooks.use_cursor(|area: Rect, _props, state| {
     // Position cursor at the text insertion point
     let col = state.cursor as u16;
     let row = 0;
     Some((col, row))
-}
+});
 ```
 
 Coordinates are relative to the component's render area (not absolute terminal coordinates). Return `None` to hide the cursor.
@@ -231,7 +224,7 @@ Events are delivered to the focused component automatically:
 app.run_loop().await?;
 ```
 
-The framework enters raw mode, handles Tab cycling, and routes events through the component tree. Components handle their own input via `handle_event()`.
+The framework enters raw mode, handles Tab cycling, and routes events through the component tree. Components handle their own input via `use_event`.
 
 ### Manual: run_interactive()
 
@@ -264,32 +257,34 @@ app.run().await?;
 
 ## Example: interactive input
 
-Here's a complete focusable input component from the `interactive` example:
+Here's a complete focusable input component:
 
 ```rust
-struct Input;
-
 #[derive(Default)]
 struct InputState {
     text: String,
     cursor: usize,
+}
+
+#[props]
+struct Input {
+    #[default("Input".to_string())]
     label: String,
 }
 
-impl Component for Input {
-    type State = InputState;
+#[component(props = Input, state = InputState)]
+fn input(props: &Input, state: &InputState, hooks: &mut Hooks<Input, InputState>) -> Elements {
+    hooks.use_focusable(true);
 
-    fn is_focusable(&self, _state: &Self::State) -> bool {
-        true
-    }
+    hooks.use_cursor({
+        let label_width = props.label.len() as u16 + 2; // ": "
+        move |_area: Rect, _props, state| {
+            let col = label_width + state.cursor as u16;
+            Some((col, 0))
+        }
+    });
 
-    fn cursor_position(&self, area: Rect, state: &Self::State) -> Option<(u16, u16)> {
-        let label_width = state.label.len() as u16 + 2; // ": "
-        let col = label_width + state.cursor as u16;
-        Some((col, 0))
-    }
-
-    fn handle_event(&self, event: &Event, state: &mut Tracked<Self::State>) -> EventResult {
+    hooks.use_event(|event, _props, state| {
         if let Event::Key(KeyEvent {
             code,
             kind: KeyEventKind::Press, ..
@@ -319,25 +314,49 @@ impl Component for Input {
         } else {
             EventResult::Ignored
         }
-    }
+    });
 
-    fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
-        let spans = vec![
-            Span::styled(
-                format!("{}: ", state.label),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(&state.text, Style::default().fg(Color::White)),
-        ];
-        Paragraph::new(Line::from(spans)).render(area, buf);
-    }
-
-    fn initial_state(&self) -> Option<InputState> {
-        Some(InputState {
-            text: String::new(),
-            cursor: 0,
-            label: "Input".into(),
+    let label = props.label.clone();
+    let text = state.text.clone();
+    element! {
+        Canvas(render_fn: move |area: Rect, buf: &mut Buffer| {
+            let spans = vec![
+                ratatui_core::text::Span::styled(
+                    format!("{}: ", label),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                ratatui_core::text::Span::styled(&text, Style::default().fg(Color::White)),
+            ];
+            Paragraph::new(ratatui_core::text::Line::from(spans)).render(area, buf);
         })
     }
 }
 ```
+
+## Manual Component trait
+
+For primitive components that need direct access to the `Component` trait methods, you can implement event handling and focus directly:
+
+```rust
+impl Component for MyPrimitive {
+    type State = MyState;
+
+    fn handle_event(&self, event: &Event, state: &mut Tracked<Self::State>) -> EventResult {
+        // bubble phase handler
+        EventResult::Ignored
+    }
+
+    fn handle_event_capture(&self, event: &Event, state: &mut Tracked<Self::State>) -> EventResult {
+        // capture phase handler
+        EventResult::Ignored
+    }
+
+    fn is_focusable(&self, _state: &Self::State) -> bool { true }
+
+    fn cursor_position(&self, area: Rect, state: &Self::State) -> Option<(u16, u16)> {
+        None
+    }
+}
+```
+
+Most user components should use `#[component]` with behavioral hooks instead.

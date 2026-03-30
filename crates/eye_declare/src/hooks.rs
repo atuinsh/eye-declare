@@ -37,11 +37,11 @@ pub(crate) struct HooksOutput<S: 'static> {
 
 /// Effect collector for declarative lifecycle management.
 ///
-/// Components receive a `Hooks` instance in their
-/// [`lifecycle`](crate::Component::lifecycle) method and use it to
-/// declare effects. The framework calls `lifecycle` after every build
-/// and update, clearing old effects and applying the new set — so
-/// effects are always consistent with current props and state.
+/// Components receive a `Hooks` instance in their `#[component]`
+/// function body and use it to declare effects. The framework runs
+/// the component function after every build and update, clearing old
+/// effects and applying the new set — so effects are always consistent
+/// with current props and state.
 ///
 /// The type parameter `P` is the component's props type, and `S` is
 /// the component's state type. Hook callbacks receive `&P` (props)
@@ -63,12 +63,14 @@ pub(crate) struct HooksOutput<S: 'static> {
 /// # Example
 ///
 /// ```ignore
-/// fn lifecycle(&self, hooks: &mut Hooks<TimerProps, TimerState>, state: &TimerState) {
-///     if self.running {
+/// #[component(props = Timer, state = TimerState)]
+/// fn timer(props: &Timer, state: &TimerState, hooks: &mut Hooks<Timer, TimerState>) -> Elements {
+///     if props.running {
 ///         hooks.use_interval(Duration::from_secs(1), |_props, s| s.elapsed += 1);
 ///     }
 ///     hooks.use_mount(|_props, s| s.started_at = Instant::now());
 ///     hooks.use_unmount(|_props, s| println!("ran for {:?}", s.started_at.elapsed()));
+///     // ... return element tree
 /// }
 /// ```
 pub struct Hooks<P: 'static, S: 'static> {
@@ -206,8 +208,10 @@ impl<P: Send + Sync + 'static, S: Send + Sync + 'static> Hooks<P, S> {
     /// # Example
     ///
     /// ```ignore
-    /// fn lifecycle(&self, hooks: &mut Hooks<Self, MyState>, _state: &MyState) {
-    ///     hooks.provide_context(self.event_sender.clone());
+    /// #[component(props = MyProvider, children = Elements)]
+    /// fn my_provider(props: &MyProvider, hooks: &mut Hooks<MyProvider, ()>, children: Elements) -> Elements {
+    ///     hooks.provide_context(props.event_sender.clone());
+    ///     children
     /// }
     /// ```
     pub fn provide_context<T: Any + Send + Sync>(&mut self, value: T) {
@@ -222,16 +226,18 @@ impl<P: Send + Sync + 'static, S: Send + Sync + 'static> Hooks<P, S> {
     /// state). The handler always fires — use the `Option` to handle
     /// the absent case.
     ///
-    /// The handler runs during reconciliation, after the component's
-    /// `lifecycle` method returns.
+    /// The handler runs during reconciliation, after the component
+    /// function returns.
     ///
     /// # Example
     ///
     /// ```ignore
-    /// fn lifecycle(&self, hooks: &mut Hooks<Self, MyState>, _state: &MyState) {
+    /// #[component(props = MyButton, state = MyState)]
+    /// fn my_button(props: &MyButton, hooks: &mut Hooks<MyButton, MyState>) -> Elements {
     ///     hooks.use_context::<Sender<AppEvent>>(|sender, _props, state| {
     ///         state.tx = sender.cloned();
     ///     });
+    ///     // ... return element tree
     /// }
     /// ```
     pub fn use_context<T: Any + Send + Sync + 'static>(

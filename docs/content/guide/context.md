@@ -24,19 +24,18 @@ Each call to `.with_context()` registers a value keyed by its concrete type. You
 
 ## Component-level context
 
-Components provide context to their descendants via `provide_context` in `lifecycle()`:
+Components provide context to their descendants via `provide_context` in their function body:
 
 ```rust
-impl Component for ThemeProvider {
-    type State = ();
+#[props]
+struct ThemeProvider {
+    theme: Theme,
+}
 
-    fn lifecycle(&self, hooks: &mut Hooks<Self, ()>, _state: &()) {
-        hooks.provide_context(self.theme.clone());
-    }
-
-    fn children(&self, _state: &(), slot: Option<Elements>) -> Option<Elements> {
-        slot // pass children through
-    }
+#[component(props = ThemeProvider, children = Elements)]
+fn theme_provider(props: &ThemeProvider, hooks: &mut Hooks<ThemeProvider, ()>, children: Elements) -> Elements {
+    hooks.provide_context(props.theme.clone());
+    children
 }
 ```
 
@@ -47,17 +46,27 @@ Any descendant of `ThemeProvider` can read the theme value.
 Components read context values with `use_context`:
 
 ```rust
-impl Component for ThemedButton {
-    type State = ButtonState;
+#[derive(Default)]
+struct ButtonState {
+    fg_color: Color,
+    bg_color: Color,
+}
 
-    fn lifecycle(&self, hooks: &mut Hooks<Self, ButtonState>, _state: &ButtonState) {
-        hooks.use_context::<Theme>(|theme, _props, state| {
-            if let Some(t) = theme {
-                state.fg_color = t.primary_color;
-                state.bg_color = t.background_color;
-            }
-        });
-    }
+#[props]
+struct ThemedButton {
+    label: String,
+}
+
+#[component(props = ThemedButton, state = ButtonState)]
+fn themed_button(props: &ThemedButton, state: &ButtonState, hooks: &mut Hooks<ThemedButton, ButtonState>) -> Elements {
+    hooks.use_context::<Theme>(|theme, _props, state| {
+        if let Some(t) = theme {
+            state.fg_color = t.primary_color;
+            state.bg_color = t.background_color;
+        }
+    });
+
+    // ... return element tree using state.fg_color, state.bg_color
 }
 ```
 
@@ -70,8 +79,8 @@ The handler **always fires** — even when no ancestor provides the type. Use th
 
 ### Timing
 
-Context consumers fire **after** `lifecycle()` returns. This means:
-1. `lifecycle()` runs — registers effects, provides context, registers consumers
+Context consumers fire **after** the component function returns. This means:
+1. The component function runs — registers effects, provides context, registers consumers
 2. Context propagation happens
 3. `use_context` handlers fire with the current context map
 
@@ -86,10 +95,10 @@ element! {
 
         ThemeProvider(theme: light_theme()) {
             // Everything here sees light_theme
-            ThemedButton(label: "Light button".into())
+            ThemedButton(label: "Light button")
         }
 
-        ThemedButton(label: "Dark button".into())
+        ThemedButton(label: "Dark button")
     }
 }
 ```
@@ -112,20 +121,35 @@ let (mut app, handle) = Application::builder()
     .with_context(tx)
     .build()?;
 
-// In any component
-fn lifecycle(&self, hooks: &mut Hooks<Self, MyState>, _state: &MyState) {
+// In a component
+#[derive(Default)]
+struct SubmitState {
+    event_tx: Option<UnboundedSender<AppEvent>>,
+}
+
+#[props]
+struct SubmitButton {
+    label: String,
+}
+
+#[component(props = SubmitButton, state = SubmitState)]
+fn submit_button(props: &SubmitButton, state: &SubmitState, hooks: &mut Hooks<SubmitButton, SubmitState>) -> Elements {
     hooks.use_context::<UnboundedSender<AppEvent>>(|sender, _props, state| {
         state.event_tx = sender.cloned();
     });
-}
 
-// Later, in handle_event:
-fn handle_event(&self, event: &Event, state: &mut Tracked<Self::State>) -> EventResult {
-    // read() goes through Deref — does not mark dirty
-    if let Some(ref tx) = state.read().event_tx {
-        tx.send(AppEvent::ButtonClicked).ok();
-    }
-    EventResult::Consumed
+    hooks.use_event(|event, _props, state| {
+        if let Event::Key(KeyEvent { code: KeyCode::Enter, kind: KeyEventKind::Press, .. }) = event {
+            if let Some(ref tx) = state.read().event_tx {
+                tx.send(AppEvent::ButtonClicked).ok();
+            }
+            EventResult::Consumed
+        } else {
+            EventResult::Ignored
+        }
+    });
+
+    // ... return element tree
 }
 ```
 

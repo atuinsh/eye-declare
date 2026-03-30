@@ -17,7 +17,7 @@ When you call a view function and return new `Elements`, the framework compares 
 When a match is found:
 - The existing node's **state is preserved** (animations continue, input text survives, etc.)
 - The component's **props are updated** to the new values
-- `lifecycle()` runs again with the new props, potentially changing effects
+- The component function runs again with the new props, potentially changing effects
 
 When no match is found:
 - Old unmatched nodes are **unmounted** (unmount effects fire, node tombstoned)
@@ -123,7 +123,7 @@ Here's the full sequence when state changes trigger a rebuild:
 3. Matched nodes: props updated, state preserved
 4. New nodes: created with initial state
 5. Removed nodes: unmount effects fire, node tombstoned
-6. `lifecycle()` runs for all live nodes
+6. Component functions run for all live nodes (collecting hooks and producing element trees)
 7. Context propagation happens
 8. Heights measured (probe render for leaves, sum for containers)
 9. `render()` output blitted for dirty nodes

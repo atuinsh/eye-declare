@@ -95,7 +95,7 @@ Scopes nest — an inner scope takes precedence over an outer one. When the scop
 Makes a typed value available to all descendant components. See [Context](context.md) for details:
 
 ```rust
-hooks.provide_context(self.theme.clone());
+hooks.provide_context(props.theme.clone());
 ```
 
 ### use_context
@@ -154,50 +154,40 @@ When `props.visible` changes from `true` to `false`, the interval stops on the n
 This example from the `lifecycle` example shows a component that records its own lifecycle events:
 
 ```rust
-struct StatusLog {
-    name: String,
-}
-
 #[derive(Default)]
 struct StatusLogState {
     entries: Vec<(String, Style)>,
 }
 
-impl Component for StatusLog {
-    type State = StatusLogState;
+#[props]
+struct StatusLog {
+    name: String,
+}
 
-    fn initial_state(&self) -> Option<StatusLogState> {
-        let mut state = StatusLogState::default();
+#[component(props = StatusLog, state = StatusLogState)]
+fn status_log(props: &StatusLog, state: &StatusLogState, hooks: &mut Hooks<StatusLog, StatusLogState>) -> Elements {
+    hooks.use_mount(|props, state| {
         state.entries.push((
-            format!("  {} created", self.name),
-            Style::default().fg(Color::DarkGray),
+            format!("  {} mounted", props.name),
+            Style::default().fg(Color::Green),
         ));
-        Some(state)
-    }
+    });
 
-    fn lifecycle(&self, hooks: &mut Hooks<Self, StatusLogState>, _state: &StatusLogState) {
-        let mount_name = self.name.clone();
-        hooks.use_mount(move |_props, state| {
-            state.entries.push((
-                format!("  {} mounted", mount_name),
-                Style::default().fg(Color::Green),
-            ));
-        });
+    hooks.use_unmount(|props, state| {
+        state.entries.push((
+            format!("  {} unmounted", props.name),
+            Style::default().fg(Color::Red),
+        ));
+    });
 
-        let unmount_name = self.name.clone();
-        hooks.use_unmount(move |_props, state| {
-            state.entries.push((
-                format!("  {} unmounted", unmount_name),
-                Style::default().fg(Color::Red),
-            ));
-        });
-    }
-
-    fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
-        let lines: Vec<Line> = state.entries.iter()
-            .map(|(text, style)| Line::from(Span::styled(text.as_str(), *style)))
-            .collect();
-        Paragraph::new(lines).render(area, buf);
+    let entries = state.entries.clone();
+    element! {
+        Canvas(render_fn: move |area: Rect, buf: &mut Buffer| {
+            let lines: Vec<Line> = entries.iter()
+                .map(|(text, style)| Line::from(Span::styled(text.as_str(), *style)))
+                .collect();
+            Paragraph::new(lines).render(area, buf);
+        })
     }
 }
 ```

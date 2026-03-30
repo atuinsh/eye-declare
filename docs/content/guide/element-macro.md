@@ -23,22 +23,28 @@ The macro returns an `Elements` value — a list of component descriptions that 
 
 ## Components with props
 
-Props use Rust struct initialization syntax. The component must implement `Default`, and props are set as field assignments:
+Props use struct-field syntax. For `#[props]` components, the macro generates builder calls with compile-time required field enforcement. For manual components, it uses struct init with `..Default::default()`:
 
 ```rust
 element! {
-    Spinner(label: "Loading...".into())
-    Markdown(source: "# Hello".into())
+    Spinner(label: "Loading...")
+    Markdown(source: "# Hello")
 }
 ```
 
-This is equivalent to:
+For `#[props]` components, the macro generates builder calls:
 
 ```rust
 let mut els = Elements::new();
-els.add(Spinner { label: "Loading...".into(), ..Default::default() });
-els.add(Markdown { source: "# Hello".into(), ..Default::default() });
+els.add(Spinner::builder().label("Loading...").build());
+els.add(Markdown::builder().source("# Hello").build());
 els
+```
+
+For manual components that implement `Default`, the macro uses struct init:
+
+```rust
+els.add(MyComponent { field: value, ..Default::default() });
 ```
 
 ## Components with children
@@ -55,7 +61,7 @@ element! {
 }
 ```
 
-Children are collected into an `Elements` list and passed to the component's `children()` method as the `slot` parameter. The component must implement `ChildCollector` (use the `impl_slot_children!` macro for this).
+Children are collected into an `Elements` list and passed as slot children. With `#[component]`, use `children = Elements` to accept slot children. For manual components, implement `ChildCollector` (use the `impl_slot_children!` macro).
 
 ## Props and children together
 
