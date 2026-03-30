@@ -196,7 +196,6 @@ mod tests {
 
         // The wrapper is a Component — build it and render
         use crate::component::Component;
-        let mut els = Elements::new();
         let hooks_output = {
             let mut hooks = Hooks::<()>::new();
             let result = wrapper.update(&mut hooks, &(), Elements::new());
