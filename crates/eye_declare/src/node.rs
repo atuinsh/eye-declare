@@ -144,44 +144,31 @@ impl<C: Component> AnyComponent for C {
             .expect("state type mismatch in update_erased");
 
         // Phase 1: call update() with immutable state and fresh hooks
-        let (decomposed, elements) = {
+        let (hooks_output, elements) = {
             let state: &C::State = tracked;
             let mut hooks = Hooks::<C::State>::new();
             let elements = self.update(&mut hooks, state, children);
             (hooks.decompose(), elements)
         };
 
-        let (
-            effects,
-            autofocus,
-            focus_scope,
-            provided,
-            consumers,
-            focusable,
-            cursor_hook,
-            event_hook,
-            capture_hook,
-            layout,
-            width_constraint,
-        ) = decomposed;
-
         // Phase 2: run context consumers with mutable tracked state
-        for consumer in consumers {
+        for consumer in hooks_output.consumers {
             consumer(context, tracked);
         }
 
         (
             LifecycleOutput {
-                effects,
-                autofocus,
-                focus_scope,
-                provided,
-                focusable,
-                cursor_hook,
-                event_hook,
-                capture_hook,
-                layout,
-                width_constraint,
+                effects: hooks_output.effects,
+                autofocus: hooks_output.autofocus,
+                focus_scope: hooks_output.focus_scope,
+                provided: hooks_output.provided,
+                focusable: hooks_output.focusable,
+                cursor_hook: hooks_output.cursor_hook,
+                event_hook: hooks_output.event_hook,
+                capture_hook: hooks_output.capture_hook,
+                layout: hooks_output.layout,
+                width_constraint: hooks_output.width_constraint,
+                height_hint: hooks_output.height_hint,
             },
             elements,
         )
@@ -325,6 +312,7 @@ pub(crate) struct LifecycleOutput {
     pub capture_hook: Option<Box<dyn AnyEventHook>>,
     pub layout: Option<Layout>,
     pub width_constraint: Option<WidthConstraint>,
+    pub height_hint: Option<u16>,
 }
 
 /// A registered effect for a node.
@@ -371,6 +359,8 @@ pub(crate) struct Node {
     pub hook_event: Option<Box<dyn AnyEventHook>>,
     /// Hook-declared event handler (capture phase).
     pub hook_capture: Option<Box<dyn AnyEventHook>>,
+    /// Hook-declared height hint (overrides component's desired_height).
+    pub hook_height_hint: Option<u16>,
     /// Whether this node was built with slot children from a parent.
     /// Nodes with slot children cannot be safely re-reconciled without
     /// the parent's element tree, so the pre-render refresh skips them.
@@ -402,6 +392,7 @@ impl Node {
             hook_cursor: None,
             hook_event: None,
             hook_capture: None,
+            hook_height_hint: None,
             has_slot: false,
         }
     }

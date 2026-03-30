@@ -929,4 +929,195 @@ mod component_tests {
             output_str
         );
     }
+
+    // --- Data children component ---
+
+    /// A styled label — data child of StyledList.
+    #[derive(Clone)]
+    struct StyledLabel {
+        text: String,
+    }
+
+    impl StyledLabel {
+        fn builder() -> StyledLabelBuilder {
+            StyledLabelBuilder {
+                text: String::new(),
+            }
+        }
+    }
+
+    struct StyledLabelBuilder {
+        text: String,
+    }
+
+    impl StyledLabelBuilder {
+        fn text(mut self, t: impl Into<String>) -> Self {
+            self.text = t.into();
+            self
+        }
+        fn build(self) -> StyledLabel {
+            StyledLabel { text: self.text }
+        }
+    }
+
+    /// Child enum for StyledList.
+    enum ListChild {
+        Label(StyledLabel),
+    }
+
+    impl From<StyledLabel> for ListChild {
+        fn from(l: StyledLabel) -> Self {
+            ListChild::Label(l)
+        }
+    }
+
+    #[props]
+    struct StyledListProps {
+        #[default("List".to_string())]
+        title: String,
+    }
+
+    #[component(props = StyledListProps, children = eye_declare::DataChildren<ListChild>)]
+    fn styled_list(
+        props: &StyledListProps,
+        children: &eye_declare::DataChildren<ListChild>,
+    ) -> Elements {
+        let mut labels: Vec<String> = Vec::new();
+        for child in children.as_slice() {
+            match child {
+                ListChild::Label(l) => labels.push(l.text.clone()),
+            }
+        }
+        let text = format!("{}: {}", props.title, labels.join(", "));
+        let mut els = Elements::new();
+        els.add(Canvas::new(move |area: Rect, buf: &mut Buffer| {
+            Paragraph::new(text.as_str()).render(area, buf);
+        }));
+        els
+    }
+
+    #[test]
+    fn data_children_component_with_children() {
+        let els = element! {
+            StyledListProps(title: "Colors") {
+                StyledLabel(text: "red")
+                StyledLabel(text: "blue")
+            }
+        };
+
+        let mut r = InlineRenderer::new(40);
+        let container = r.push(VStack);
+        r.rebuild(container, els);
+
+        let output = r.render();
+        let output_str = String::from_utf8_lossy(&output);
+        // ANSI diff skips space characters (cursor movements), so check
+        // for content fragments rather than the exact combined string.
+        assert!(
+            output_str.contains("Colors:")
+                && output_str.contains("red")
+                && output_str.contains("blue"),
+            "should render title + data children: {}",
+            output_str
+        );
+    }
+
+    #[test]
+    fn data_children_component_without_children() {
+        // Used without braces — gets default (empty) data children
+        let els = element! {
+            StyledListProps(title: "Empty")
+        };
+
+        let mut r = InlineRenderer::new(40);
+        let container = r.push(VStack);
+        r.rebuild(container, els);
+
+        let output = r.render();
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(
+            output_str.contains("Empty:"),
+            "should render title with no children: {}",
+            output_str
+        );
+    }
+
+    // --- Data children with state + initial_state ---
+
+    #[derive(Default)]
+    pub struct AccumState {
+        pub render_count: u32,
+    }
+
+    /// Child type for the stateful data-children component.
+    pub enum AccumChild {
+        Label(String),
+    }
+
+    impl From<String> for AccumChild {
+        fn from(s: String) -> Self {
+            AccumChild::Label(s)
+        }
+    }
+
+    #[props]
+    struct AccumProps {
+        #[default("header".to_string())]
+        header: String,
+    }
+
+    #[component(
+        props = AccumProps,
+        state = AccumState,
+        initial_state = AccumState { render_count: 1 },
+        children = eye_declare::DataChildren<AccumChild>
+    )]
+    fn accum(
+        props: &AccumProps,
+        state: &AccumState,
+        children: &eye_declare::DataChildren<AccumChild>,
+    ) -> Elements {
+        let labels: Vec<&str> = children
+            .as_slice()
+            .iter()
+            .map(|c| match c {
+                AccumChild::Label(s) => s.as_str(),
+            })
+            .collect();
+        let text = format!(
+            "{} (n={}) [{}]",
+            props.header,
+            state.render_count,
+            labels.join(", ")
+        );
+        let mut els = Elements::new();
+        els.add(Canvas::new(move |area: Rect, buf: &mut Buffer| {
+            Paragraph::new(text.as_str()).render(area, buf);
+        }));
+        els
+    }
+
+    #[test]
+    fn data_children_with_state_and_initial_state() {
+        // Verifies that initial_state works correctly for both the
+        // props-type Component impl and the wrapper Component impl.
+        let els = element! {
+            AccumProps(header: "test") {
+                // String children go through From<String> for AccumChild
+            }
+        };
+
+        let mut r = InlineRenderer::new(40);
+        let container = r.push(VStack);
+        r.rebuild(container, els);
+
+        let output = r.render();
+        let output_str = String::from_utf8_lossy(&output);
+        // initial_state sets render_count = 1; wrapper delegates to props
+        assert!(
+            output_str.contains("n=1"),
+            "wrapper initial_state should delegate to props: {}",
+            output_str
+        );
+    }
 }

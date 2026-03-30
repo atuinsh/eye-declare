@@ -47,6 +47,7 @@ cargo run --example markdown_demo    # Markdown rendering showcase
 cargo run --example growing          # Dynamically growing content
 cargo run --example nested           # Nested component trees
 cargo run --example wrapping         # Word wrapping and resize behavior
+cargo run --example data_children    # Typed data children with #[component]
 
 # Docs
 cargo doc --open                     # Build and open API docs
