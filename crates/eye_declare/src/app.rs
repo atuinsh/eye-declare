@@ -28,7 +28,7 @@ impl Drop for RawModeGuard {
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::component::VStack;
 use crate::element::Elements;
@@ -36,9 +36,15 @@ use crate::inline::InlineRenderer;
 use crate::node::NodeId;
 
 type StateUpdateFn<S> = Box<dyn FnOnce(&mut S) + Send>;
+type StateGetFn<S> = Box<dyn FnOnce(&S) + Send>;
 type ViewFn<S> = Box<dyn Fn(&S) -> Elements>;
 type CommitCallbackFn<S> = Box<dyn FnMut(&CommittedElement, &mut S)>;
 type EventHandlerFn<'a, S> = Option<&'a mut dyn FnMut(&Event, &mut S) -> ControlFlow>;
+
+enum AppMessage<S> {
+    UpdateState(StateUpdateFn<S>),
+    GetState(StateGetFn<S>),
+}
 
 /// Information about an element that has scrolled into terminal scrollback.
 ///
@@ -123,7 +129,7 @@ pub enum KeyboardProtocol {
 /// });
 /// ```
 pub struct Handle<S: Send + 'static> {
-    tx: mpsc::UnboundedSender<StateUpdateFn<S>>,
+    tx: mpsc::UnboundedSender<AppMessage<S>>,
     exit: Arc<AtomicBool>,
 }
 
@@ -133,7 +139,20 @@ impl<S: Send + 'static> Handle<S> {
     /// This is non-blocking and can be called from both sync and
     /// async contexts.
     pub fn update(&self, f: impl FnOnce(&mut S) + Send + 'static) {
-        let _ = self.tx.send(Box::new(f));
+        let _ = self.tx.send(AppMessage::UpdateState(Box::new(f)));
+    }
+
+    /// Get the current state.
+    pub fn fetch<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&S) -> T + Send + 'static,
+    ) -> oneshot::Receiver<T> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self.tx.send(AppMessage::GetState(Box::new(move |s| {
+            let _ = tx.send(f(s));
+        })));
+
+        rx
     }
 
     /// Signal the application to exit its event loop.
@@ -385,7 +404,7 @@ pub struct Application<S: Send + 'static> {
     container: NodeId,
     dirty: bool,
     on_commit: Option<CommitCallbackFn<S>>,
-    rx: mpsc::UnboundedReceiver<StateUpdateFn<S>>,
+    rx: mpsc::UnboundedReceiver<AppMessage<S>>,
     exit: Arc<AtomicBool>,
     ctrl_c: CtrlCBehavior,
     keyboard_protocol: KeyboardProtocol,
@@ -652,7 +671,10 @@ impl<S: Send + 'static> Application<S> {
             tokio::select! {
                 result = self.rx.recv(), if channel_open => {
                     match result {
-                        Some(update) => {
+                        Some(AppMessage::GetState(get)) => {
+                            get(&self.state);
+                        }
+                        Some(AppMessage::UpdateState(update)) => {
                             update(&mut self.state);
                             self.dirty = true;
                         }
@@ -763,9 +785,12 @@ impl<S: Send + 'static> Application<S> {
 
                 result = self.rx.recv(), if channel_open => {
                     match result {
-                        Some(update) => {
+                        Some(AppMessage::UpdateState(update)) => {
                             update(&mut self.state);
                             self.dirty = true;
+                        }
+                        Some(AppMessage::GetState(get)) => {
+                            get(&self.state);
                         }
                         None => {
                             // All Handles dropped
@@ -807,8 +832,15 @@ impl<S: Send + 'static> Application<S> {
 
     fn drain_updates(&mut self) {
         while let Ok(update) = self.rx.try_recv() {
-            update(&mut self.state);
-            self.dirty = true;
+            match update {
+                AppMessage::UpdateState(update) => {
+                    update(&mut self.state);
+                    self.dirty = true;
+                }
+                AppMessage::GetState(get) => {
+                    get(&self.state);
+                }
+            }
         }
     }
 

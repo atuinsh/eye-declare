@@ -42,6 +42,19 @@ tokio::spawn(async move {
 });
 ```
 
+### Fetching state
+
+Sometimes you need to read the current state without mutating it — for example, to check a condition before deciding what to do next. `fetch()` sends a read closure into the event loop and returns a `oneshot::Receiver<T>` with the result:
+
+```rust
+let count = handle.fetch(|s| s.messages.len()).await.unwrap();
+if count > 100 {
+    handle.update(|s| s.messages.drain(..50));
+}
+```
+
+Like `update()`, the closure runs on the event loop, so it sees a consistent snapshot of state. The returned receiver is `.await`-ed to get the value. Because `fetch()` does not mutate state, it does not trigger a re-render.
+
 ### Batching
 
 Multiple `update()` calls between frames are batched into a single rebuild. This means you can call `update()` rapidly without causing unnecessary re-renders:
