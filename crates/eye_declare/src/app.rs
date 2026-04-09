@@ -841,7 +841,6 @@ impl<S: Send + 'static> Application<S> {
                     get(&self.state);
                 }
             }
-            self.dirty = true;
         }
     }
 
