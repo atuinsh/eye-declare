@@ -698,7 +698,15 @@ impl<S: Send + 'static> Application<S> {
             self.check_commits();
         }
 
+        // Drain any pending messages so that callers blocked on
+        // handle.fetch() are unblocked with the final state, rather than
+        // having their oneshot senders silently dropped.
+        self.drain_updates();
+
         // Final flush + commit check + reclaim trailing blank rows
+        if self.dirty {
+            self.rebuild();
+        }
         self.flush_to(writer)?;
         self.check_commits();
         let finalize_bytes = self.inline.finalize();
@@ -813,6 +821,11 @@ impl<S: Send + 'static> Application<S> {
             self.flush_to(stdout)?;
             self.check_commits();
         }
+
+        // Drain any pending messages so that callers blocked on
+        // handle.fetch() are unblocked with the final state, rather than
+        // having their oneshot senders silently dropped.
+        self.drain_updates();
 
         // Final rebuild + render so state changes from the exit handler are visible
         if self.dirty {
@@ -1392,5 +1405,46 @@ mod tests {
         app.flush(&mut buf).unwrap();
         let s = String::from_utf8_lossy(&buf);
         assert!(s.contains("app-context"));
+    }
+
+    #[tokio::test]
+    async fn fetch_succeeds_after_exit_called_inside_update() {
+        // Regression test: handle.fetch() enqueued after handle.exit() is
+        // called inside a handle.update() closure must still be processed.
+        // Previously, the loop would break immediately after processing the
+        // update that called exit(), leaving the fetch's oneshot sender
+        // unresolved and blocking_recv() returning Err.
+        let (mut app, handle) = Application::builder()
+            .state(0u32)
+            .view(|n: &u32| {
+                let mut els = Elements::new();
+                els.add(Text::unstyled(format!("n={}", n)));
+                els
+            })
+            .width(20)
+            .build()
+            .unwrap();
+
+        // Simulate the dispatch pattern: update+exit, then fetch, from a
+        // blocking thread — exactly what Atuin's dispatch loop does.
+        let fetch_handle = tokio::task::spawn_blocking(move || {
+            // Step 1: enqueue state mutation + exit (like on_exit does)
+            let h3 = handle.clone();
+            handle.update(move |s| {
+                *s = 42;
+                h3.exit();
+            });
+
+            // Step 2: immediately fetch state (like persist_session does)
+            let result = handle.fetch(|s| *s).blocking_recv();
+            result
+        });
+
+        let mut buf = Vec::new();
+        app.render_loop(&mut buf).await.unwrap();
+
+        // The fetch must have succeeded with the updated value
+        let fetched = fetch_handle.await.unwrap();
+        assert_eq!(fetched, Ok(42));
     }
 }
