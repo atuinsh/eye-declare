@@ -1,3 +1,8 @@
+## [0.4.1](https://github.com/atuinsh/eye-declare/compare/v0.4.0..v0.4.1) - 2026-04-14
+
+### 🐛 Bug Fixes
+
+- Re-render components when use_mount dirties state ([#27](https://github.com/atuinsh/eye-declare/issues/27)) - ([7d29d89](https://github.com/atuinsh/eye-declare/commit/7d29d899072ac2ffbfd3fb77548c97a6a3d3cadf))
 ## [0.4.0](https://github.com/atuinsh/eye-declare/compare/v0.3.0..v0.4.0) - 2026-04-09
 
 ### ⛰️ Features
