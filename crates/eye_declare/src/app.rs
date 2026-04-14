@@ -1436,8 +1436,7 @@ mod tests {
             });
 
             // Step 2: immediately fetch state (like persist_session does)
-            let result = handle.fetch(|s| *s).blocking_recv();
-            result
+            handle.fetch(|s| *s).blocking_recv()
         });
 
         let mut buf = Vec::new();
