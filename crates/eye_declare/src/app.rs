@@ -786,14 +786,13 @@ impl<S: Send + 'static> Application<S> {
                         self.dirty = true;
 
                         // Then app handler, only if the component tree didn't consume the event
-                        if result == EventResult::Ignored {
-                            if let Some(ref mut h) = handler {
+                        if result == EventResult::Ignored
+                            && let Some(ref mut h) = handler {
                                 let flow = h(&evt, &mut self.state);
                                 if matches!(flow, ControlFlow::Exit) {
                                     break;
                                 }
                             }
-                        }
                     }
                 }
 
