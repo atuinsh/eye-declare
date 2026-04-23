@@ -308,22 +308,20 @@ async fn main() -> io::Result<()> {
                     state.input.insert(state.cursor, *c);
                     state.cursor += c.len_utf8();
                 }
-                KeyCode::Backspace => {
-                    if state.cursor > 0 {
+                KeyCode::Backspace
+                    if state.cursor > 0 => {
                         state.cursor -= 1;
                         state.input.remove(state.cursor);
                     }
-                }
                 KeyCode::Left => {
                     state.cursor = state.cursor.saturating_sub(1);
                 }
-                KeyCode::Right => {
-                    if state.cursor < state.input.len() {
+                KeyCode::Right
+                    if state.cursor < state.input.len() => {
                         state.cursor += 1;
                     }
-                }
-                KeyCode::Enter => {
-                    if !state.input.is_empty() {
+                KeyCode::Enter
+                    if !state.input.is_empty() => {
                         let text = std::mem::take(&mut state.input);
                         state.cursor = 0;
                         let user_id = state.next_id();
@@ -346,7 +344,6 @@ async fn main() -> io::Result<()> {
                             stream_response(h2, assistant_id).await;
                         });
                     }
-                }
                 KeyCode::Esc => {
                     return ControlFlow::Exit;
                 }
