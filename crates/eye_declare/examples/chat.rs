@@ -308,42 +308,39 @@ async fn main() -> io::Result<()> {
                     state.input.insert(state.cursor, *c);
                     state.cursor += c.len_utf8();
                 }
-                KeyCode::Backspace
-                    if state.cursor > 0 => {
-                        state.cursor -= 1;
-                        state.input.remove(state.cursor);
-                    }
+                KeyCode::Backspace if state.cursor > 0 => {
+                    state.cursor -= 1;
+                    state.input.remove(state.cursor);
+                }
                 KeyCode::Left => {
                     state.cursor = state.cursor.saturating_sub(1);
                 }
-                KeyCode::Right
-                    if state.cursor < state.input.len() => {
-                        state.cursor += 1;
-                    }
-                KeyCode::Enter
-                    if !state.input.is_empty() => {
-                        let text = std::mem::take(&mut state.input);
-                        state.cursor = 0;
-                        let user_id = state.next_id();
-                        state.messages.push(ChatMessage {
-                            id: user_id,
-                            kind: MessageKind::User(text),
-                        });
+                KeyCode::Right if state.cursor < state.input.len() => {
+                    state.cursor += 1;
+                }
+                KeyCode::Enter if !state.input.is_empty() => {
+                    let text = std::mem::take(&mut state.input);
+                    state.cursor = 0;
+                    let user_id = state.next_id();
+                    state.messages.push(ChatMessage {
+                        id: user_id,
+                        kind: MessageKind::User(text),
+                    });
 
-                        let assistant_id = state.next_id();
-                        state.messages.push(ChatMessage {
-                            id: assistant_id,
-                            kind: MessageKind::Assistant {
-                                content: String::new(),
-                                done: false,
-                            },
-                        });
+                    let assistant_id = state.next_id();
+                    state.messages.push(ChatMessage {
+                        id: assistant_id,
+                        kind: MessageKind::Assistant {
+                            content: String::new(),
+                            done: false,
+                        },
+                    });
 
-                        let h2 = h.clone();
-                        tokio::spawn(async move {
-                            stream_response(h2, assistant_id).await;
-                        });
-                    }
+                    let h2 = h.clone();
+                    tokio::spawn(async move {
+                        stream_response(h2, assistant_id).await;
+                    });
+                }
                 KeyCode::Esc => {
                     return ControlFlow::Exit;
                 }
