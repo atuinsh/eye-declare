@@ -67,6 +67,24 @@ handle.update(|s| s.messages.push(msg3));
 // → one rebuild with all three messages
 ```
 
+### Conditional updates
+
+`update()` always triggers a rebuild, even if the callback doesn't actually change anything. For high-frequency events like keystroke handlers, use `update_tracked()` instead — it only triggers a rebuild if the callback actually writes through `DerefMut`:
+
+```rust
+handle.update_tracked(|state| {
+    let new_blank = text.is_empty();
+    // read() checks the value without marking dirty
+    if state.read().is_input_blank != new_blank {
+        // Field access through DerefMut — marks dirty, triggers rebuild
+        state.is_input_blank = new_blank;
+    }
+    // If nothing was written, no rebuild happens
+});
+```
+
+The callback receives `&mut TrackedRef<'_, S>`, which works like `&mut S` but tracks whether any mutation occurred. Use `.read()` for comparisons that shouldn't trigger a rebuild. Direct field access goes through `DerefMut` and sets the dirty flag.
+
 ### Exiting
 
 Call `handle.exit()` to stop the event loop, or simply drop the handle. When using `run()`, the app exits when the handle is dropped *and* all component effects (intervals, etc.) have stopped.

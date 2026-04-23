@@ -90,13 +90,12 @@ fn main() -> io::Result<()> {
                     stdout.write_all(&status_output)?;
                     stdout.flush()?;
                 }
-                Event::Key(key) => {
+                Event::Key(key)
                     if key.code == KeyCode::Char('q')
                         || (key.code == KeyCode::Char('c')
-                            && key.modifiers.contains(KeyModifiers::CONTROL))
-                    {
-                        break;
-                    }
+                            && key.modifiers.contains(KeyModifiers::CONTROL)) =>
+                {
+                    break;
                 }
                 _ => {}
             }
