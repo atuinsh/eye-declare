@@ -22,6 +22,24 @@ impl Frame {
         self.buffer.area
     }
 
+    pub(crate) fn write_committed_row(
+        &self,
+        row: u16,
+        out: &mut Vec<u8>,
+        cursor: &mut crate::escape::CursorState,
+    ) {
+        let area = self.buffer.area;
+        if row >= area.height {
+            return;
+        }
+
+        crate::escape::write_committed_row(
+            out,
+            (0..area.width).map(|x| &self.buffer[(x, row)]),
+            cursor,
+        );
+    }
+
     /// Diff against a previous frame, producing the set of changed cells.
     ///
     /// Handles height mismatches: if the frames have different heights,

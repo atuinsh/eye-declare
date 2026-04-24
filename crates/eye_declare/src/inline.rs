@@ -270,20 +270,27 @@ impl InlineRenderer {
             let mut diff = new_frame.diff(&empty);
 
             let mut output = Vec::new();
+            let stream_until = new_height.saturating_sub(self.terminal_height);
+            self.stream_rows_into_scrollback(&new_frame, 0, stream_until, &mut output);
 
             // Emit newlines to claim rows (minus 1 because the cursor
             // is already on the first row)
-            if new_height > 0 {
-                let newline_count = new_height.saturating_sub(1) as usize;
+            let new_rows_needed = new_height.saturating_sub(self.emitted_rows);
+            if new_rows_needed > 0 {
+                let newline_count = if self.emitted_rows == 0 {
+                    new_rows_needed.saturating_sub(1)
+                } else {
+                    new_rows_needed
+                } as usize;
+                if self.emitted_rows > 0 && newline_count > 0 {
+                    output.push(b'\r');
+                    self.cursor.col = 0;
+                }
                 output.resize(output.len() + newline_count, b'\n');
                 self.emitted_rows = new_height;
+                self.cursor.row = new_height.saturating_sub(1);
+                self.cursor.col = 0;
             }
-
-            // The cursor is now at the last row of our claimed space.
-            // Our content starts at (cursor_row - new_height + 1).
-            // Set cursor position so escape generation knows where we are.
-            self.cursor.row = new_height.saturating_sub(1);
-            self.cursor.col = 0;
 
             // Filter out cells in scrollback (unreachable by cursor)
             let scrolled_past = self.emitted_rows.saturating_sub(self.terminal_height);
@@ -311,6 +318,14 @@ impl InlineRenderer {
         }
 
         let mut output = Vec::new();
+        let old_scrolled_past = self.emitted_rows.saturating_sub(self.terminal_height);
+        let new_scrolled_past = new_height.saturating_sub(self.terminal_height);
+        self.stream_rows_into_scrollback(
+            &new_frame,
+            old_scrolled_past,
+            new_scrolled_past,
+            &mut output,
+        );
 
         // If the frame grew, we may need to claim more terminal rows.
         // Only emit newlines for rows beyond what we've already claimed —
@@ -353,6 +368,40 @@ impl InlineRenderer {
         self.append_cursor_position(&mut output);
         self.prev_frame = Some(new_frame);
         output
+    }
+
+    /// Stream rows that would be in terminal scrollback by the time the
+    /// current frame is fully claimed.
+    ///
+    /// The normal growth path first emits blank newlines and then paints
+    /// visible cells by cursor movement. Rows that scroll out during those
+    /// newlines cannot be reached afterward, so burst appends would leave
+    /// blank terminal scrollback. This method writes those rows as normal
+    /// terminal output before claiming the rest of the frame. It starts at
+    /// the old scrollback boundary, so insertions above a persistent footer
+    /// overwrite the soon-to-scroll visible rows before advancing the terminal.
+    fn stream_rows_into_scrollback(
+        &mut self,
+        frame: &Frame,
+        start: u16,
+        end: u16,
+        output: &mut Vec<u8>,
+    ) {
+        let frame_height = frame.area().height;
+        let end = end.min(frame_height);
+        if start >= end {
+            return;
+        }
+
+        crate::escape::write_relative_move(output, &mut self.cursor, start, 0);
+
+        for row in start..end {
+            frame.write_committed_row(row, output, &mut self.cursor);
+            output.extend_from_slice(b"\r\n");
+            self.cursor.row = row.saturating_add(1);
+            self.cursor.col = 0;
+            self.emitted_rows = self.emitted_rows.max(self.cursor.row.saturating_add(1));
+        }
     }
 
     /// How many rows have been emitted to the terminal.
@@ -536,6 +585,211 @@ mod tests {
         }
     }
 
+    struct WrappingBlock;
+
+    impl Component for WrappingBlock {
+        type State = String;
+
+        fn render(&self, area: Rect, buf: &mut Buffer, state: &Self::State) {
+            let text = ratatui_core::text::Text::raw(state.as_str());
+            ratatui_core::widgets::Widget::render(crate::wrap::wrapping_paragraph(text), area, buf);
+        }
+
+        fn desired_height(&self, width: u16, state: &Self::State) -> Option<u16> {
+            let text = ratatui_core::text::Text::raw(state.as_str());
+            Some(crate::wrap::wrapped_line_count(&text, width))
+        }
+
+        fn initial_state(&self) -> Option<String> {
+            Some(String::new())
+        }
+    }
+
+    struct TestTerminal {
+        parser: vte::Parser,
+        width: usize,
+        height: usize,
+        cursor_row: usize,
+        cursor_col: usize,
+        pending_wrap: bool,
+        viewport: Vec<Vec<char>>,
+        scrollback: Vec<String>,
+    }
+
+    impl TestTerminal {
+        fn new(width: usize, height: usize) -> Self {
+            Self {
+                parser: vte::Parser::new(),
+                width,
+                height,
+                cursor_row: 0,
+                cursor_col: 0,
+                pending_wrap: false,
+                viewport: vec![vec![' '; width]; height],
+                scrollback: Vec::new(),
+            }
+        }
+
+        fn feed(&mut self, bytes: &[u8]) {
+            let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
+            parser.advance(self, bytes);
+            self.parser = parser;
+        }
+
+        fn scrollback_lines(&self) -> Vec<String> {
+            self.scrollback.clone()
+        }
+
+        fn viewport_lines(&self) -> Vec<String> {
+            self.viewport
+                .iter()
+                .map(|line| trimmed_line(line))
+                .collect()
+        }
+
+        fn linefeed(&mut self) {
+            if self.height == 0 {
+                return;
+            }
+            if self.cursor_row + 1 >= self.height {
+                let top = self.viewport.remove(0);
+                self.scrollback.push(trimmed_line(&top));
+                self.viewport.push(vec![' '; self.width]);
+                self.cursor_row = self.height - 1;
+            } else {
+                self.cursor_row += 1;
+            }
+            self.pending_wrap = false;
+        }
+
+        fn put_char(&mut self, c: char) {
+            if self.height == 0 || self.width == 0 {
+                return;
+            }
+            if self.pending_wrap {
+                self.linefeed();
+                self.cursor_col = 0;
+            }
+            self.viewport[self.cursor_row][self.cursor_col] = c;
+            if self.cursor_col + 1 >= self.width {
+                self.pending_wrap = true;
+            } else {
+                self.cursor_col += 1;
+                self.pending_wrap = false;
+            }
+        }
+
+        fn csi_param(params: &vte::Params, default: usize) -> usize {
+            params
+                .iter()
+                .next()
+                .and_then(|values| values.first().copied())
+                .map(usize::from)
+                .filter(|&n| n > 0)
+                .unwrap_or(default)
+        }
+    }
+
+    fn trimmed_line(chars: &[char]) -> String {
+        let mut line: String = chars.iter().collect();
+        while line.ends_with(' ') {
+            line.pop();
+        }
+        line
+    }
+
+    impl vte::Perform for TestTerminal {
+        fn print(&mut self, c: char) {
+            self.put_char(c);
+        }
+
+        fn execute(&mut self, byte: u8) {
+            match byte {
+                b'\r' => {
+                    self.cursor_col = 0;
+                    self.pending_wrap = false;
+                }
+                b'\n' => self.linefeed(),
+                b'\x08' => {
+                    self.cursor_col = self.cursor_col.saturating_sub(1);
+                    self.pending_wrap = false;
+                }
+                _ => {}
+            }
+        }
+
+        fn hook(
+            &mut self,
+            _params: &vte::Params,
+            _intermediates: &[u8],
+            _ignore: bool,
+            _action: char,
+        ) {
+        }
+
+        fn put(&mut self, _byte: u8) {}
+
+        fn unhook(&mut self) {}
+
+        fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {}
+
+        fn csi_dispatch(
+            &mut self,
+            params: &vte::Params,
+            _intermediates: &[u8],
+            _ignore: bool,
+            action: char,
+        ) {
+            let n = Self::csi_param(params, 1);
+            match action {
+                'A' => self.cursor_row = self.cursor_row.saturating_sub(n),
+                'B' => {
+                    self.cursor_row = (self.cursor_row + n).min(self.height.saturating_sub(1));
+                    self.pending_wrap = false;
+                }
+                'C' => {
+                    self.cursor_col = (self.cursor_col + n).min(self.width.saturating_sub(1));
+                    self.pending_wrap = false;
+                }
+                'D' => {
+                    self.cursor_col = self.cursor_col.saturating_sub(n);
+                    self.pending_wrap = false;
+                }
+                'E' => {
+                    self.cursor_row = (self.cursor_row + n).min(self.height.saturating_sub(1));
+                    self.cursor_col = 0;
+                    self.pending_wrap = false;
+                }
+                'F' => {
+                    self.cursor_row = self.cursor_row.saturating_sub(n);
+                    self.cursor_col = 0;
+                    self.pending_wrap = false;
+                }
+                'H' => {
+                    self.cursor_row = 0;
+                    self.cursor_col = 0;
+                    self.pending_wrap = false;
+                }
+                'J' => {
+                    for row in self.cursor_row..self.height {
+                        let start_col = if row == self.cursor_row {
+                            self.cursor_col
+                        } else {
+                            0
+                        };
+                        for col in start_col..self.width {
+                            self.viewport[row][col] = ' ';
+                        }
+                    }
+                }
+                'h' | 'l' | 'm' => {}
+                _ => {}
+            }
+        }
+
+        fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+    }
+
     #[test]
     fn first_render_empty_produces_nothing() {
         let mut ir = InlineRenderer::new_with_height(10, 24);
@@ -593,6 +847,125 @@ mod tests {
         assert!(s.contains('\n'));
         // Should contain the new line text
         assert!(s.contains("line2"));
+    }
+
+    #[test]
+    fn first_render_burst_populates_scrollback() {
+        let mut terminal = TestTerminal::new(20, 3);
+        let mut ir = InlineRenderer::new_with_height(20, 3);
+        let id = ir.push(TextBlock);
+        let lines: Vec<String> = (0..10).map(|i| format!("line {i:02}")).collect();
+        ir.state_mut::<TextBlock>(id).extend(lines.iter().cloned());
+
+        let output = ir.render();
+        terminal.feed(&output);
+
+        assert_eq!(terminal.scrollback_lines(), lines[..7]);
+        assert_eq!(terminal.viewport_lines(), lines[7..]);
+    }
+
+    #[test]
+    fn full_width_rows_do_not_create_blank_scrollback_gaps() {
+        let mut terminal = TestTerminal::new(10, 3);
+        let mut ir = InlineRenderer::new_with_height(10, 3);
+        let id = ir.push(TextBlock);
+        let lines: Vec<String> = (0..8).map(|i| format!("row-{i:06}")).collect();
+        assert!(lines.iter().all(|line| line.len() == 10));
+        ir.state_mut::<TextBlock>(id).extend(lines.iter().cloned());
+
+        terminal.feed(&ir.render());
+
+        assert_eq!(terminal.scrollback_lines(), lines[..5]);
+        assert_eq!(terminal.viewport_lines(), lines[5..]);
+    }
+
+    #[test]
+    fn subsequent_burst_append_populates_scrollback_once() {
+        let mut terminal = TestTerminal::new(20, 5);
+        let mut ir = InlineRenderer::new_with_height(20, 5);
+        let id = ir.push(TextBlock);
+        let initial: Vec<String> = (0..3).map(|i| format!("line {i:02}")).collect();
+        ir.state_mut::<TextBlock>(id).extend(initial);
+        terminal.feed(&ir.render());
+
+        let lines: Vec<String> = (0..12).map(|i| format!("line {i:02}")).collect();
+        ir.state_mut::<TextBlock>(id).clear();
+        ir.state_mut::<TextBlock>(id).extend(lines.iter().cloned());
+        terminal.feed(&ir.render());
+
+        assert_eq!(terminal.scrollback_lines(), lines[..7]);
+        assert_eq!(terminal.viewport_lines(), lines[7..]);
+    }
+
+    #[test]
+    fn subsequent_burst_insert_above_live_tail_populates_scrollback() {
+        let mut terminal = TestTerminal::new(20, 5);
+        let mut ir = InlineRenderer::new_with_height(20, 5);
+        let id = ir.push(TextBlock);
+        let footer = ["footer 0", "footer 1", "footer 2"];
+
+        let mut initial: Vec<String> = (0..2).map(|i| format!("line {i:02}")).collect();
+        initial.extend(footer.iter().map(|s| s.to_string()));
+        ir.state_mut::<TextBlock>(id).extend(initial);
+        terminal.feed(&ir.render());
+
+        let mut lines: Vec<String> = (0..12).map(|i| format!("line {i:02}")).collect();
+        lines.extend(footer.iter().map(|s| s.to_string()));
+        ir.state_mut::<TextBlock>(id).clear();
+        ir.state_mut::<TextBlock>(id).extend(lines.iter().cloned());
+        terminal.feed(&ir.render());
+
+        assert_eq!(terminal.scrollback_lines(), lines[..10]);
+        assert_eq!(terminal.viewport_lines(), lines[10..]);
+    }
+
+    #[test]
+    fn burst_insert_above_live_tail_survives_footer_removal_finalize() {
+        let mut terminal = TestTerminal::new(20, 5);
+        let mut ir = InlineRenderer::new_with_height(20, 5);
+        let id = ir.push(TextBlock);
+        let footer = ["footer 0", "footer 1", "footer 2"];
+
+        let mut initial: Vec<String> = (0..2).map(|i| format!("line {i:02}")).collect();
+        initial.extend(footer.iter().map(|s| s.to_string()));
+        ir.state_mut::<TextBlock>(id).extend(initial);
+        terminal.feed(&ir.render());
+
+        let transcript: Vec<String> = (0..12).map(|i| format!("line {i:02}")).collect();
+        let mut live_lines = transcript.clone();
+        live_lines.extend(footer.iter().map(|s| s.to_string()));
+        ir.state_mut::<TextBlock>(id).clear();
+        ir.state_mut::<TextBlock>(id).extend(live_lines);
+        terminal.feed(&ir.render());
+
+        ir.state_mut::<TextBlock>(id).clear();
+        ir.state_mut::<TextBlock>(id)
+            .extend(transcript.iter().cloned());
+        terminal.feed(&ir.render());
+        terminal.feed(&ir.finalize());
+
+        let mut actual = terminal.scrollback_lines();
+        actual.extend(terminal.viewport_lines());
+        actual.retain(|line| !line.is_empty());
+
+        assert_eq!(actual, transcript);
+    }
+
+    #[test]
+    fn wrapped_text_burst_populates_scrollback() {
+        let mut terminal = TestTerminal::new(5, 3);
+        let mut ir = InlineRenderer::new_with_height(5, 3);
+        let id = ir.push(WrappingBlock);
+        ir.state_mut::<WrappingBlock>(id)
+            .push_str("aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp");
+
+        terminal.feed(&ir.render());
+
+        assert_eq!(
+            terminal.scrollback_lines(),
+            ["aa bb", "cc dd", "ee ff", "gg hh", "ii jj"]
+        );
+        assert_eq!(terminal.viewport_lines(), ["kk ll", "mm nn", "oo pp"]);
     }
 
     #[test]

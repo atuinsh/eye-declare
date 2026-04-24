@@ -1,3 +1,4 @@
+use ratatui_core::buffer::Cell;
 use ratatui_core::style::{Color, Modifier, Style};
 
 use crate::frame::Diff;
@@ -134,6 +135,56 @@ pub fn write_relative_move(
         }
     }
     cursor.col = target_col;
+}
+
+/// Write one committed row as normal terminal output.
+///
+/// Unlike [`Diff::to_escape_sequences`], this does not use cursor addressing.
+/// It is used for rows that are about to become terminal scrollback: once they
+/// scroll away, the renderer can no longer repaint them, so they must be
+/// emitted as real text before any newline pushes them out of reach.
+pub(crate) fn write_committed_row<'a>(
+    out: &mut Vec<u8>,
+    cells: impl IntoIterator<Item = &'a Cell>,
+    cursor: &mut CursorState,
+) {
+    out.push(b'\r');
+    cursor.col = 0;
+
+    let cells: Vec<&Cell> = cells.into_iter().collect();
+    let mut last_nonblank = None;
+    for (i, cell) in cells.iter().enumerate() {
+        if cell.symbol() != " " || cell.style() != Style::default() {
+            last_nonblank = Some(i);
+        }
+    }
+
+    let Some(last) = last_nonblank else {
+        out.extend_from_slice(b"\x1b[0m");
+        cursor.style = Style::default();
+        return;
+    };
+
+    let mut skip = 0usize;
+    for cell in cells.into_iter().take(last + 1) {
+        if skip > 0 {
+            skip -= 1;
+            continue;
+        }
+
+        write_style_diff(out, &cursor.style, &cell.style());
+        cursor.style = cell.style();
+
+        let symbol = cell.symbol();
+        out.extend_from_slice(symbol.as_bytes());
+
+        let width = unicode_display_width(symbol);
+        cursor.col = cursor.col.saturating_add(width as u16);
+        skip = width.saturating_sub(1);
+    }
+
+    out.extend_from_slice(b"\x1b[0m");
+    cursor.style = Style::default();
 }
 
 /// Write the minimal SGR escape sequence to transition from `from` to `to`.
