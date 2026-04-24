@@ -1,3 +1,8 @@
+## [0.5.1](https://github.com/atuinsh/eye-declare/compare/v0.5.0..v0.5.1) - 2026-04-24
+
+### 🐛 Bug Fixes
+
+- Preserve burst rows in scrollback ([#33](https://github.com/atuinsh/eye-declare/issues/33)) - ([14e6492](https://github.com/atuinsh/eye-declare/commit/14e64929caa2060187b9f7065498386063e37ca9))
 ## [0.5.0](https://github.com/atuinsh/eye-declare/compare/v0.4.3..v0.5.0) - 2026-04-23
 
 ### ⛰️ Features
