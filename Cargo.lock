@@ -640,6 +640,7 @@ name = "spike"
 version = "0.0.0"
 dependencies = [
  "crossterm",
+ "futures",
  "ratatui-core",
 ]
 

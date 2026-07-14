@@ -150,4 +150,85 @@ app to either mirror it (the echo) or query the store (breaking view purity).
   needs documented precedence (first-match-wins in declaration order is the
   obvious rule).
 
-## Port 4: driver-loop sketch (`update`/`push`/`spawn`) — TODO
+## Port 4: driver-loop sketch (`update`/`push`/`spawn`)
+
+Source: the *shape* of `driver.rs` (1,088 lines) + `commands/inline.rs`'s
+channel/thread scaffolding → `src/ports/driver.rs` (~230 lines, honest
+caveat: the sketch omits session persistence, permissions, and real SSE —
+the claim is that the *adapters* died, not the business logic).
+
+### The four adapters, checked off
+
+- **`DriverEventSender`** — gone. Messages go straight to `update`;
+  sub-models compose by enum embedding (`AppMsg::Input(input_box_a::Msg)`)
+  plus `Keymap::map` / `map_msg`. Parent policy over child messages is
+  plain pattern matching (parent claims `Submit`, delegates the rest) — no
+  OutMsg machinery needed.
+- **`sync_view_state`** — gone, structurally. There is no `ViewState` to
+  clone the FSM into: the model holds only the live turn (5 fields vs 18,
+  no `all_events`/`visible_events`/`archived_events`/`turns` clones per
+  event, no `committed_turn_count` filtering per frame). The driver-thread
+  turn pre-computation is unnecessary because per-frame work is bounded by
+  the live turn, not conversation length.
+- **`on_commit` key parsing** — gone. Sealing a turn is
+  `ctx.push(agent_turn_view(&events, ..)); self.streaming = None;` — the
+  turn leaves the model at push time; there is nothing to prune later.
+- **The `spawn_blocking` driver thread + `mpsc` bridge** — gone; the
+  runtime's loop delivers stream items as messages.
+
+Bonus deletions: the `usize::MAX` sentinel pending-turn (the tail composes
+a spinner), and `CancelGeneration` plumbing — Esc/Ctrl+C-while-busy is
+`self.streaming = None` (cancel-on-drop `Task`), four lines of `update`.
+
+### O6: resolved — `push` suffices
+
+Sealing pushes the completed turn *above* the tail while the input box keeps
+rendering *in* the tail below it — exactly the visual order the app wants,
+with no `push_before` or ordering primitive. The streaming turn lives in the
+tail until sealed; its committed position is where the tail was.
+
+### New design fork discovered (→ spec as O7)
+
+`map_msg` compiled as a **pure phantom re-wrap** — nothing on `Element`
+actually carries `Msg` in the strict-Elm candidate, because all message
+emission lives in the keymap (bindings + fallthrough). The `Msg` parameter
+on `Element` is currently vestigial. Dropping it would dissolve the
+`ElementExt<Msg>`/`Fluent` split from Port 1 and every `Msg`-inference
+concern. Counterpoint: element-level emission may return with mouse support
+(`on_click`) — though runtime hit-testing → `FocusHandle`/keymap routing is
+a plausible alternative there too. Lean: try a `Msg`-free `Element` first.
+
+### Engine contract addendum
+
+`Element::cursor` (from Port 3) has to reach the terminal:
+`Engine::present` needs a cursor-position parameter (or sibling call) —
+`present(tail: &Buffer, cursor: Option<(u16, u16)>)`. Update the spec.
+
+---
+
+# Bake-off verdict (exit criteria from REDESIGN.md Phase 1)
+
+1. **DSL: fluent builders, no macro.** Builders won every case including
+   the hardest (Port 2's stateful diff numbering, where the macro needed an
+   escape-block workaround). Keys/identity deleted throughout. Sugar
+   candidates if ever wanted — `.any()` density, multi-span text — are
+   method-level polish, not grounds for a parser.
+2. **Widget state (O1): strict Elm** — controlled components. State lives
+   in the model as plain values; views borrow it; policy is keymap data.
+   Framework-managed state reintroduced the `InputUpdated` echo, callback
+   props, and a store-leak into `Element::height`. Possible future
+   carve-out: a B-style store for ephemeral view state the app never reads
+   (scroll offsets) — uncontrolled components, explicitly opt-in.
+3. **Event emission (O5): keymap-only.** No element-level key handlers were
+   needed for any ported behavior; dispatch simplifies to
+   override → focus-scoped → global → focus-fallthrough, first match in
+   declaration order wins. (Whether `Element` keeps its `Msg` parameter at
+   all is O7.)
+4. **Block lifecycle (O6): `push` alone suffices.**
+5. **API rules for the real implementation:** (1) combinators live on a
+   `Msg`-free trait; (2) `&data -> impl Element` helpers need `+ use<>` or
+   a boxed-return house style; (3) `AnyElement` carries a lifetime so views
+   borrow the model; (4) `Element` exposes `cursor()`; (5) `Engine::present`
+   takes the cursor hint.
+6. **What the engine must expose** (unchanged from the spec otherwise):
+   `commit(rows)`, `present(tail, cursor)`, `resize`, `resync`, `finalize`.

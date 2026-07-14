@@ -59,8 +59,9 @@ pub fn agent_turn_view(
 
 /// The per-event dispatch that was a `#(match ...)` block inline in the
 /// original. Native `match` needs a named function (or an immediate closure)
-/// plus `.any()` per arm to unify types.
-fn event_view(event: &UiEvent) -> El {
+/// plus `.any()` per arm to unify types. `pub(crate)`: Port 4's live-turn
+/// tail reuses it.
+pub(crate) fn event_view(event: &UiEvent) -> El {
     match event {
         UiEvent::Text { content } => markdown(content.clone()).pad_left(2).any(),
         UiEvent::ToolSummary(summary) => tool_summary_view(summary).any(),

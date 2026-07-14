@@ -615,3 +615,128 @@ impl<Msg> Element<Msg> for TextArea<'_> {
         ))
     }
 }
+
+// ───────────────────────────────────────────────────────────────────
+// Runtime surface: App, Ctx, Task (added for Port 4)
+// ───────────────────────────────────────────────────────────────────
+
+/// The application, Elm-shaped. The implementing struct IS the model:
+/// `update` takes `&mut self`, `tail` takes `&self` — the borrow checker
+/// enforces the discipline.
+pub trait App: Sized + 'static {
+    type Msg: 'static;
+    /// What `run()` returns after `ctx.exit(..)`.
+    type Output: Default;
+
+    fn update(&mut self, msg: Self::Msg, ctx: &mut Ctx<Self>);
+
+    /// The live tail. Re-run every frame; borrows the model.
+    fn tail(&self) -> impl Element<Self::Msg> + '_;
+
+    /// Key bindings, rebuilt from the model each update.
+    fn keymap(&self) -> Keymap<Self::Msg> {
+        keymap()
+    }
+}
+
+/// Effect context handed to `update`. Blocks pushed here are rendered once
+/// (at current width) and flow toward scrollback — committed output is an
+/// effect; only the tail is a view.
+pub struct Ctx<A: App> {
+    pushed: Vec<AnyElement<'static, A::Msg>>,
+    exit_with: Option<A::Output>,
+}
+
+impl<A: App> Ctx<A> {
+    /// Append a finished block to the timeline. Irreversible, like
+    /// `println!`. Blocks are `'static`: they leave the model at push time.
+    pub fn push(&mut self, block: impl Element<A::Msg> + 'static) {
+        self.pushed.push(Box::new(block));
+    }
+
+    /// Spawn a stream of messages (the LLM-turn shape); each item feeds
+    /// back into `update`. The returned Task cancels on drop.
+    #[must_use]
+    pub fn spawn<S>(&mut self, stream: S) -> Task
+    where
+        S: futures::Stream<Item = A::Msg> + Send + 'static,
+    {
+        let _ = stream;
+        Task(())
+    }
+
+    /// End the run loop; `run()` returns this value after teardown.
+    pub fn exit(&mut self, output: A::Output) {
+        self.exit_with = Some(output);
+    }
+}
+
+/// Handle to spawned work. **Dropping it cancels the work** — holding it in
+/// the model makes cancellation a plain assignment (`self.streaming = None`).
+pub struct Task(());
+
+impl Task {
+    /// Fire-and-forget: run to completion even after the handle is gone.
+    pub fn detach(self) {
+        std::mem::forget(self);
+    }
+}
+
+impl Drop for Task {
+    fn drop(&mut self) {
+        // Stub: the real runtime aborts the spawned work here.
+    }
+}
+
+impl<Msg: 'static> Keymap<Msg> {
+    /// Re-target bindings to a parent message type (Elm's `Html.map` for
+    /// keymaps) — how a sub-model's keymap embeds into the app's.
+    pub fn map<M2>(self, f: impl Fn(Msg) -> M2 + Clone + 'static) -> Keymap<M2> {
+        Keymap {
+            bindings: self
+                .bindings
+                .into_iter()
+                .map(|(scope, key, msg)| (scope, key, f(msg)))
+                .collect(),
+            fallthrough: self
+                .fallthrough
+                .into_iter()
+                .map(|(focus, g)| {
+                    let f = f.clone();
+                    let mapped: FallthroughFn<M2> = Box::new(move |ev| f(g(ev)));
+                    (focus, mapped)
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Adapt an element from one message type to another (Elm's `Html.map`).
+///
+/// Trivially a phantom re-wrap today, because nothing on `Element` actually
+/// carries `Msg` in the strict-Elm candidate — emission happens in the
+/// keymap. See FINDINGS: this is evidence the `Msg` parameter on `Element`
+/// itself may be vestigial.
+pub fn map_msg<'a, M1: 'a, M2>(el: impl Element<M1> + 'a) -> impl Element<M2> + 'a {
+    struct Map<E, M1>(E, std::marker::PhantomData<fn() -> M1>);
+
+    impl<M1, M2, E: Element<M1>> Element<M2> for Map<E, M1> {
+        fn height(&self, width: u16) -> u16 {
+            self.0.height(width)
+        }
+
+        fn render(&self, area: Rect, buf: &mut Buffer) {
+            self.0.render(area, buf)
+        }
+
+        fn animated(&self) -> Option<Duration> {
+            self.0.animated()
+        }
+
+        fn cursor(&self, area: Rect) -> Option<(u16, u16)> {
+            self.0.cursor(area)
+        }
+    }
+
+    Map(el, std::marker::PhantomData)
+}

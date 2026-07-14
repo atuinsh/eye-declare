@@ -1,6 +1,8 @@
 # eye-declare v2: Timeline Architecture
 
-**Status:** Draft for teardown — nothing here is final until the Phase 1 bake-off validates it.
+**Status:** Phase 1 (bake-off) complete — 2026-07-14. Verdicts merged below;
+evidence in `crates/spike/FINDINGS.md`, candidate API in `crates/spike/src/ui.rs`.
+Next: Phase 2, engine extraction.
 **Context:** `.binarymuse/library-redesign.md` (assessment, Atuin AI evidence, hazard list).
 **Decisions already made:** new unpublished crate in this workspace; bake-off before engine extraction; current `eye_declare` API fully frozen.
 
@@ -214,7 +216,8 @@ impl Engine {
     /// Append final rows above the tail; they flow into scrollback. Immutable after.
     pub fn commit(&mut self, rows: &Buffer) -> Vec<u8>;
     /// Replace the live tail. Diffs against the previous tail frame.
-    pub fn present(&mut self, tail: &Buffer) -> Vec<u8>;
+    /// `cursor` is the focused element's hardware-cursor hint.
+    pub fn present(&mut self, tail: &Buffer, cursor: Option<(u16, u16)>) -> Vec<u8>;
     pub fn resize(&mut self, width: u16) -> Vec<u8>;
     /// Full repaint of the tail region; recovery from cursor-state drift.
     pub fn resync(&mut self) -> Vec<u8>;
@@ -284,27 +287,61 @@ must expose — which parameterizes the Phase 2 extraction.
 
 ## Open questions
 
-- **O1 — widget state:** strict Elm (A) vs framework-managed (B). Lean: A. Decide by
-  bake-off, not taste.
-- **O2 — keymap dispatch order:** is override→element→scoped→global right? Validate
-  against: Ctrl+C during tool execution, Tab in editor vs Tab-to-insert, Esc layering.
+Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
+
+- **O1 — widget state: RESOLVED → strict Elm** (controlled components).
+  State is a plain model value, views borrow it, policy is keymap data.
+  Framework-managed state reintroduced the `InputUpdated` echo, callback
+  props, and leaked the store into `Element::height`. Possible later
+  carve-out: an opt-in store for ephemeral view state the app never reads
+  (scroll offsets) — uncontrolled components, explicitly second-class.
+- **O2 — keymap dispatch: RESOLVED, simplified** →
+  override → focus-scoped → global → focus-fallthrough, first match in
+  declaration order. The "focused element's own editing keys" layer proved
+  unnecessary: editing reaches the widget as fallthrough messages
+  (`Msg::Edit(ev)` → `state.handle(ev)` in update).
+- **O5 — element-level emission: RESOLVED → none needed.** Every ported
+  behavior routed through the keymap. See O7.
+- **O6 — sealing: RESOLVED → `push` suffices.** A sealed turn lands above
+  the tail while the input box keeps rendering below; no `push_before`.
+
+Still open:
+
 - **O3 — resize semantics:** committed-is-immutable means still-visible sealed blocks
   don't re-wrap on width change (v1 re-wraps them). Acceptable? (Matches plain-println
   behavior; massive simplification.)
 - **O4 — naming:** working names `eye_declare_engine` / `eye_declare_next`; real names
   (and whether v2 is `eye_declare 1.0` or a rename) decided at the end.
-- **O5 — `on_key`/message emission shape** on Element: `Option<Msg>` return vs handler
-  closures vs event→Msg mapping combinators. Bake-off decides.
-- **O6 — mid-tail block sealing:** a turn that finishes while a later spinner exists —
-  does `push` suffice (tail reorders freely each frame) or do we need `push_before`?
-  Suspect `push` suffices; confirm in the driver-loop sketch.
+- **O7 — is `Element<Msg>` vestigial? (new, from Port 4.)** With keymap-only
+  emission, nothing on `Element` carries `Msg`; `map_msg` is a phantom
+  re-wrap. A `Msg`-free `Element` would dissolve the `ElementExt`/`Fluent`
+  trait split and all `Msg`-inference concerns. Counterpoint: element-level
+  `on_click` might want it back for mouse support (alternative: runtime
+  hit-testing routed through focus/keymap). Lean: build `Msg`-free first.
+
+## Bake-off outcomes (Phase 1 exit criteria)
+
+- **DSL: fluent builders, no macro.** Won every case including the diff
+  view's stateful line numbering, where `element!` needed an escape-block
+  workaround. Keys and identity props deleted throughout. If sugar is ever
+  added, it targets `.any()` density and multi-span text — method-level
+  polish, not a parser.
+- **API rules:** combinators live on a `Msg`-free trait; `&data -> impl
+  Element` helpers need `+ use<>` (or a boxed-return house style);
+  `AnyElement<'a, Msg>` carries a lifetime so views borrow the model;
+  `Element` exposes `cursor()`; `Engine::present` takes the cursor hint:
+  `present(tail: &Buffer, cursor: Option<(u16, u16)>)`.
+- **Composition pattern:** sub-model messages embed by enum; `Keymap::map`
+  and element `map_msg` re-target them; parents claim child messages by
+  pattern matching (no OutMsg machinery).
 
 ## Phases
 
-1. **Spec** — this document; argue until stable.
-2. **Bake-off** — protocol above; throwaway code, keeper decisions.
+1. **Spec** — this document; argue until stable. ✅
+2. **Bake-off** — protocol above; throwaway code, keeper decisions. ✅ (2026-07-14)
 3. **Engine extraction** — `inline`/`frame`/`escape`/`wrap` + `TestTerminal` →
    engine crate with the contract above; pure-refactor PRs; v1 tests keep passing.
+   **← next**
 4. **Build the new layer** — new crate, driven by ports of the current `examples/`.
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
