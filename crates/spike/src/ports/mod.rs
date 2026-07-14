@@ -2,3 +2,4 @@
 //! see `.planning/REDESIGN.md` Phase 1 for the protocol.
 
 pub mod agent_turn;
+pub mod file_edit;

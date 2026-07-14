@@ -66,7 +66,39 @@ completed turns are *pushed blocks* and only the active turn renders in the
 tail — the block lifecycle is Port 4's (driver sketch) job. This port only
 validates the DSL shape.
 
-## Port 2: file-edit diff view — TODO
+## Port 2: `file_edit_tool_view` / `file_write_tool_view` (nesting stress test)
+
+Source: view/mod.rs lines ~640–830 → `src/ports/file_edit.rs`. Compiled first
+try; the Port 1 design rules (Msg-free `Fluent`, `+ use<>`) held with no new
+friction.
+
+### Wins
+
+- **The escape-block workaround dissolved — the headline finding.** The
+  original's diff body is `#(for ...)` wrapping `#({ ... })` which
+  pre-collects `lines_rendered: Vec<(idx, prefix, text, style, gutter_text,
+  gutter_style)>`, because the macro's `#(for)` cannot thread the mutable
+  `before_pos`/`after_pos` line counters through iteration. In builder form
+  the counters mutate inside an ordinary `FnMut` closure in
+  `.children(hunk.lines.iter().map(...))` — the intermediate `Vec`, the
+  6-tuple, and both levels of `#()` ceremony are gone. The gnarliest view
+  code in atuin-ai became unremarkable Rust. This was the case the bake-off
+  most needed to test, and builders won it outright.
+- **The 6-tuple was partly macro-induced:** `gutter_style` was always equal
+  to the line style; the pair collapses to one once you're in plain code.
+- **Cross-view dedup became natural.** Edit and write views each carried a
+  near-identical ~25-line pending/success/error status match; extracting
+  `tool_status_line` was trivial because elements are just values. (Possible
+  with `Elements` too, but the original didn't — block-macro syntax seems to
+  discourage small extractions.)
+- **Two more `key: &str` parameters** and ~6 `key:` props deleted.
+- Guard clauses (`let Some(preview) else return status_line`) carry over
+  verbatim — parity, since the original also used early returns.
+
+### Costs
+
+- None new. `.any()` density unchanged from Port 1; format-string gutter
+  alignment identical to the original.
 
 ## Port 3: InputBox ×2 (widget state candidates) — TODO
 

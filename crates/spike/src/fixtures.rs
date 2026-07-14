@@ -50,9 +50,11 @@ pub enum ToolRenderData {
     },
     FileEdit {
         path: PathBuf,
+        preview: Option<EditPreview>,
     },
     FileWrite {
         path: PathBuf,
+        preview: Option<WritePreview>,
     },
     Remote,
     FileRead {
@@ -102,6 +104,44 @@ impl ToolGroup {
 pub enum ToolGroupKind {
     FileRead,
     HistorySearch,
+}
+
+pub enum DiffLine {
+    Context(String),
+    Removed(String),
+    Added(String),
+}
+
+pub struct DiffHunk {
+    pub before_start: usize,
+    pub after_start: usize,
+    pub lines: Vec<DiffLine>,
+}
+
+pub struct EditPreview {
+    pub hunks: Vec<DiffHunk>,
+}
+
+impl EditPreview {
+    /// Highest line number the diff will display, for gutter sizing.
+    pub fn max_line_number(&self) -> usize {
+        self.hunks
+            .iter()
+            .map(|h| h.before_start.max(h.after_start) + h.lines.len())
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+pub struct WritePreview {
+    pub lines: Vec<String>,
+    pub total_lines: usize,
+}
+
+impl WritePreview {
+    pub fn remaining_lines(&self) -> usize {
+        self.total_lines.saturating_sub(self.lines.len())
+    }
 }
 
 pub enum DangerLevel {

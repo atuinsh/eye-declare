@@ -74,11 +74,17 @@ fn tool_summary_view(summary: &ToolSummary) -> impl Element<Msg> + use<> {
 }
 
 fn tool_call_view(details: &ToolCallDetails) -> El {
+    use crate::ports::file_edit::{file_edit_tool_view, file_write_tool_view};
+
     match &details.render_data {
         ToolRenderData::Shell { command, preview } => shell_tool_view(command, preview.as_ref()),
         ToolRenderData::Remote => tool_status_view(&details.name, &details.status),
-        // Diff/write previews are Port 2 (file_edit_tool_view / file_write_tool_view).
-        ToolRenderData::FileEdit { .. } | ToolRenderData::FileWrite { .. } => empty().any(),
+        ToolRenderData::FileEdit { path, preview } => {
+            file_edit_tool_view(&details.status, path, preview.as_ref())
+        }
+        ToolRenderData::FileWrite { path, preview } => {
+            file_write_tool_view(&details.status, path, preview.as_ref())
+        }
         ToolRenderData::FileRead { .. }
         | ToolRenderData::HistorySearch { .. }
         | ToolRenderData::SkillLoad => empty().any(),
