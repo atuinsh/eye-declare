@@ -26,13 +26,25 @@ pub trait Element<Msg> {
     fn animated(&self) -> Option<Duration> {
         None
     }
+
+    /// Hardware cursor position (relative to `area`) when this element is
+    /// focused. `None` hides the cursor.
+    fn cursor(&self, _area: Rect) -> Option<(u16, u16)> {
+        None
+    }
 }
 
 /// A boxed, type-erased element. Match arms that produce different element
 /// types converge on this via [`ElementExt::any`].
-pub type AnyElement<Msg> = Box<dyn Element<Msg>>;
+///
+/// Carries a lifetime: views borrow from the model (Port 3 finding — a
+/// strict-Elm text area renders from `&TextAreaState` living in the app
+/// model; an implicit `'static` bound here would force cloning every
+/// stateful widget per frame). The tail is built, rendered, and dropped
+/// within one frame, so model borrows are naturally scoped.
+pub type AnyElement<'a, Msg> = Box<dyn Element<Msg> + 'a>;
 
-impl<Msg> Element<Msg> for Box<dyn Element<Msg>> {
+impl<Msg> Element<Msg> for Box<dyn Element<Msg> + '_> {
     fn height(&self, width: u16) -> u16 {
         self.as_ref().height(width)
     }
@@ -44,6 +56,10 @@ impl<Msg> Element<Msg> for Box<dyn Element<Msg>> {
     fn animated(&self) -> Option<Duration> {
         self.as_ref().animated()
     }
+
+    fn cursor(&self, area: Rect) -> Option<(u16, u16)> {
+        self.as_ref().cursor(area)
+    }
 }
 
 /// Type erasure. Separate from [`Fluent`] because `any()` mentions `Msg` in
@@ -51,14 +67,17 @@ impl<Msg> Element<Msg> for Box<dyn Element<Msg>> {
 /// combinators must NOT be `Msg`-parameterized at all — display-only elements
 /// implement `Element<Msg>` for every `Msg`, and a `Msg`-generic `pad_left`
 /// on such a receiver is uninferrable (found the hard way; see FINDINGS.md).
-pub trait ElementExt<Msg>: Element<Msg> + Sized + 'static {
+pub trait ElementExt<Msg>: Element<Msg> + Sized {
     /// Type-erase, for heterogeneous branches.
-    fn any(self) -> AnyElement<Msg> {
+    fn any<'a>(self) -> AnyElement<'a, Msg>
+    where
+        Self: 'a,
+    {
         Box::new(self)
     }
 }
 
-impl<Msg, E: Element<Msg> + 'static> ElementExt<Msg> for E {}
+impl<Msg, E: Element<Msg>> ElementExt<Msg> for E {}
 
 /// `Msg`-free combinators, available on every builder.
 pub trait Fluent: Sized {
@@ -109,26 +128,26 @@ impl<Msg, E: Element<Msg>> Element<Msg> for Padded<E> {}
 // ───────────────────────────────────────────────────────────────────
 
 /// Vertical stack. Children get full width; height is content-driven.
-pub struct Col<Msg> {
-    children: Vec<AnyElement<Msg>>,
+pub struct Col<'a, Msg> {
+    children: Vec<AnyElement<'a, Msg>>,
     gap: u16,
 }
 
-pub fn col<Msg>() -> Col<Msg> {
+pub fn col<'a, Msg>() -> Col<'a, Msg> {
     Col {
         children: Vec::new(),
         gap: 0,
     }
 }
 
-impl<Msg> Col<Msg> {
+impl<'a, Msg> Col<'a, Msg> {
     /// Blank rows between children.
     pub fn gap(mut self, rows: u16) -> Self {
         self.gap = rows;
         self
     }
 
-    pub fn child(mut self, child: impl Element<Msg> + 'static) -> Self {
+    pub fn child(mut self, child: impl Element<Msg> + 'a) -> Self {
         self.children.push(Box::new(child));
         self
     }
@@ -136,15 +155,18 @@ impl<Msg> Col<Msg> {
     pub fn children<I>(mut self, children: I) -> Self
     where
         I: IntoIterator,
-        I::Item: Element<Msg> + 'static,
+        I::Item: Element<Msg> + 'a,
     {
-        self.children
-            .extend(children.into_iter().map(|c| Box::new(c) as AnyElement<Msg>));
+        self.children.extend(
+            children
+                .into_iter()
+                .map(|c| Box::new(c) as AnyElement<'a, Msg>),
+        );
         self
     }
 }
 
-impl<Msg> Element<Msg> for Col<Msg> {}
+impl<Msg> Element<Msg> for Col<'_, Msg> {}
 
 /// Column width within a [`Row`].
 pub enum Width {
@@ -155,27 +177,27 @@ pub enum Width {
 
 /// Horizontal layout. Cells declare `Fixed(n)` or `Fill` widths;
 /// row height is the max of cell heights.
-pub struct Row<Msg> {
-    cells: Vec<(Width, AnyElement<Msg>)>,
+pub struct Row<'a, Msg> {
+    cells: Vec<(Width, AnyElement<'a, Msg>)>,
 }
 
-pub fn row<Msg>() -> Row<Msg> {
+pub fn row<'a, Msg>() -> Row<'a, Msg> {
     Row { cells: Vec::new() }
 }
 
-impl<Msg> Row<Msg> {
-    pub fn fixed(mut self, cols: u16, child: impl Element<Msg> + 'static) -> Self {
+impl<'a, Msg> Row<'a, Msg> {
+    pub fn fixed(mut self, cols: u16, child: impl Element<Msg> + 'a) -> Self {
         self.cells.push((Width::Fixed(cols), Box::new(child)));
         self
     }
 
-    pub fn fill(mut self, child: impl Element<Msg> + 'static) -> Self {
+    pub fn fill(mut self, child: impl Element<Msg> + 'a) -> Self {
         self.cells.push((Width::Fill, Box::new(child)));
         self
     }
 }
 
-impl<Msg> Element<Msg> for Row<Msg> {}
+impl<Msg> Element<Msg> for Row<'_, Msg> {}
 
 // ───────────────────────────────────────────────────────────────────
 // Leaves
@@ -314,3 +336,282 @@ impl Viewport {
 }
 
 impl<Msg> Element<Msg> for Viewport {}
+
+// ───────────────────────────────────────────────────────────────────
+// Input: events, focus, keymap (added for Port 3)
+// ───────────────────────────────────────────────────────────────────
+
+/// A terminal input event as delivered to the app: key press or paste.
+#[derive(Clone, Debug)]
+pub enum InputEvent {
+    Key(crossterm::event::KeyEvent),
+    Paste(String),
+}
+
+/// A key pattern for keymap bindings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Key {
+    pub code: crossterm::event::KeyCode,
+    pub mods: crossterm::event::KeyModifiers,
+}
+
+pub fn key(code: crossterm::event::KeyCode) -> Key {
+    Key {
+        code,
+        mods: crossterm::event::KeyModifiers::NONE,
+    }
+}
+
+impl Key {
+    pub fn ctrl(mut self) -> Self {
+        self.mods |= crossterm::event::KeyModifiers::CONTROL;
+        self
+    }
+
+    pub fn shift(mut self) -> Self {
+        self.mods |= crossterm::event::KeyModifiers::SHIFT;
+        self
+    }
+}
+
+/// Focus identity, owned by the app and stored in its model (GPUI-style).
+///
+/// The runtime tracks which handle is currently focused; elements bind via
+/// `track_focus`, keymap bindings scope via `in_scope`. Stub: real semantics
+/// (single focused handle per runtime) live in the runtime, not here.
+#[derive(Clone, Default)]
+pub struct FocusHandle(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl FocusHandle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn focus(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn blur(&self) {
+        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_focused(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+enum BindingScope {
+    /// Fires before the focused element sees the event. For Ctrl+C-tier
+    /// chords only.
+    GlobalOverride,
+    /// Fires if neither the focused element nor a focus-scoped binding
+    /// consumed the event.
+    Global,
+    /// Fires when the given handle has focus (after the focused element).
+    Focus(FocusHandle),
+}
+
+/// Key → message bindings, rebuilt from the model each update (so bindings
+/// can be conditional on app state — see the Tab bindings in Port 3A).
+///
+/// Dispatch order for a key event:
+/// 1. `on_override` bindings
+/// 2. the focused element's own editing keys
+/// 3. `in_scope` bindings for the focused handle
+/// 4. `on` (global) bindings
+/// 5. `fallthrough` mappers for the focused handle (raw event → Msg)
+type FallthroughFn<Msg> = Box<dyn Fn(InputEvent) -> Msg>;
+
+pub struct Keymap<Msg> {
+    bindings: Vec<(BindingScope, Key, Msg)>,
+    fallthrough: Vec<(FocusHandle, FallthroughFn<Msg>)>,
+}
+
+pub fn keymap<Msg>() -> Keymap<Msg> {
+    Keymap {
+        bindings: Vec::new(),
+        fallthrough: Vec::new(),
+    }
+}
+
+impl<Msg> Keymap<Msg> {
+    pub fn on(mut self, key: Key, msg: Msg) -> Self {
+        self.bindings.push((BindingScope::Global, key, msg));
+        self
+    }
+
+    pub fn on_override(mut self, key: Key, msg: Msg) -> Self {
+        self.bindings.push((BindingScope::GlobalOverride, key, msg));
+        self
+    }
+
+    pub fn in_scope(mut self, focus: &FocusHandle, key: Key, msg: Msg) -> Self {
+        self.bindings
+            .push((BindingScope::Focus(focus.clone()), key, msg));
+        self
+    }
+
+    /// Route unbound events to a message while `focus` is focused. This is
+    /// how a text input receives ordinary typing without the framework
+    /// owning any editing logic.
+    pub fn fallthrough(
+        mut self,
+        focus: &FocusHandle,
+        map: impl Fn(InputEvent) -> Msg + 'static,
+    ) -> Self {
+        self.fallthrough.push((focus.clone(), Box::new(map)));
+        self
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Text area (Candidate A: state is a plain value in the app model)
+// ───────────────────────────────────────────────────────────────────
+
+/// Editable multi-line text state. Lives in the app model; `update` mutates
+/// it, the view borrows it.
+///
+/// Spike shim: stands in for tui-textarea behind the real ratatui interop
+/// adapter (which needs measure + cursor + render on `&self` — all of which
+/// tui-textarea provides). Editing behavior here is deliberately minimal.
+#[derive(Default)]
+pub struct TextAreaState {
+    lines: Vec<String>,
+    cursor: (usize, usize),
+}
+
+impl TextAreaState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Apply an ordinary editing event (typed char, backspace, arrows,
+    /// paste). Policy keys (submit, newline chords) are the keymap's job,
+    /// not this widget's.
+    pub fn handle(&mut self, event: &InputEvent) {
+        match event {
+            InputEvent::Key(k) => {
+                if let crossterm::event::KeyCode::Char(c) = k.code {
+                    if self.lines.is_empty() {
+                        self.lines.push(String::new());
+                    }
+                    self.lines[self.cursor.1].push(c);
+                    self.cursor.0 += 1;
+                }
+                // Backspace/arrows/etc. elided in the shim.
+            }
+            InputEvent::Paste(s) => {
+                if self.lines.is_empty() {
+                    self.lines.push(String::new());
+                }
+                self.lines[self.cursor.1].push_str(s);
+            }
+        }
+    }
+
+    pub fn insert_newline(&mut self) {
+        self.lines.push(String::new());
+        self.cursor = (0, self.lines.len() - 1);
+    }
+
+    pub fn text(&self) -> String {
+        self.lines.join("\n")
+    }
+
+    pub fn set_text(&mut self, text: &str) {
+        self.lines = text.split('\n').map(String::from).collect();
+        let last = self.lines.len().saturating_sub(1);
+        self.cursor = (self.lines.get(last).map_or(0, String::len), last);
+    }
+
+    /// Take the content and clear (the submit path).
+    pub fn take_text(&mut self) -> String {
+        let text = self.text();
+        self.lines.clear();
+        self.cursor = (0, 0);
+        text
+    }
+
+    pub fn is_blank(&self) -> bool {
+        self.lines.iter().all(|l| l.trim().is_empty())
+    }
+
+    /// Rows needed at the given content width (honest measurement).
+    pub fn measure(&self, _width: u16) -> u16 {
+        (self.lines.len() as u16).max(1)
+    }
+}
+
+/// Bordered text area view. Borrows its state from the model.
+pub struct TextArea<'a> {
+    state: &'a TextAreaState,
+    title: String,
+    title_right: String,
+    footer: String,
+    placeholder: String,
+    max_height: u16,
+    focus: Option<FocusHandle>,
+}
+
+pub fn text_area(state: &TextAreaState) -> TextArea<'_> {
+    TextArea {
+        state,
+        title: String::new(),
+        title_right: String::new(),
+        footer: String::new(),
+        placeholder: String::new(),
+        max_height: u16::MAX,
+        focus: None,
+    }
+}
+
+impl<'a> TextArea<'a> {
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    pub fn title_right(mut self, title: impl Into<String>) -> Self {
+        self.title_right = title.into();
+        self
+    }
+
+    pub fn footer(mut self, footer: impl Into<String>) -> Self {
+        self.footer = footer.into();
+        self
+    }
+
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.placeholder = placeholder.into();
+        self
+    }
+
+    pub fn max_height(mut self, rows: u16) -> Self {
+        self.max_height = rows;
+        self
+    }
+
+    /// Bind focus: the runtime shows this element's cursor and routes
+    /// events here while the handle is focused. Focus-dependent visuals
+    /// (cursor visibility, placeholder) come from `handle.is_focused()` —
+    /// no `active` prop shadowing focus in app state.
+    pub fn track_focus(mut self, focus: &FocusHandle) -> Self {
+        self.focus = Some(focus.clone());
+        self
+    }
+}
+
+impl<Msg> Element<Msg> for TextArea<'_> {
+    fn height(&self, width: u16) -> u16 {
+        // content + border chrome, capped
+        (self.state.measure(width.saturating_sub(4)) + 2).min(self.max_height)
+    }
+
+    fn cursor(&self, _area: Rect) -> Option<(u16, u16)> {
+        let focused = self.focus.as_ref().is_some_and(FocusHandle::is_focused);
+        focused.then_some((
+            self.state.cursor.0 as u16 + 2,
+            self.state.cursor.1 as u16 + 1,
+        ))
+    }
+}

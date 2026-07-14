@@ -3,3 +3,5 @@
 
 pub mod agent_turn;
 pub mod file_edit;
+pub mod input_box_a;
+pub mod input_box_b;

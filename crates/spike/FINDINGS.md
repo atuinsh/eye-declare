@@ -100,6 +100,54 @@ friction.
 - None new. `.any()` density unchanged from Port 1; format-string gutter
   alignment identical to the original.
 
-## Port 3: InputBox ×2 (widget state candidates) — TODO
+## Port 3: InputBox ×2 — the widget-state decision (O1)
+
+Source: `components/input_box.rs` + the Tab policy from `components/atuin_ai.rs`
+→ `src/ports/input_box_a.rs` (strict Elm) and `input_box_b.rs`
+(framework-managed, egui-Memory style). Both cover submit, Shift+Enter/Ctrl+J
+newline, Tab slash-accept, Tab insert-command, paste, and focus-driven visuals.
+
+### Preliminary verdict: **Candidate A (strict Elm), decisively.**
+
+Every pathology in the original maps to a structural fix in A and survives —
+or returns — in B:
+
+| Original pathology | A (state in model) | B (framework store) |
+|---|---|---|
+| `Arc<Mutex<TextArea>>` | plain model value, view borrows | store + `Any` downcasts |
+| `InputUpdated` echo per keystroke | **deleted** — `is_blank`/slash results are derived reads | **reintroduced verbatim** (`input_text` mirror + `on_change`) |
+| `tx` context plumbing | handlers are messages | `Box<dyn Fn>` callback props return (`on_submit`, `on_change`, `intercept_key`) |
+| `active` prop shadowing focus | `FocusHandle::is_focused()` | same fix available |
+| Tab spread across 3 dispatch layers | conditional keymap data, one place, rebuilt per update | config flags + escape hatches; slash-accept **hit a wall** — `intercept_key` can read widget text but can't write it (needs yet another read-write hook); A does it in 3 lines of `update` |
+| widget measurement | `height()` reads borrowed state | `height()` needs store access — the managed model leaks into the core `Element` trait |
+
+Fair credit to B: it's the right shape for ephemeral *view* state the app
+genuinely never reads (scroll offsets, hover, spinner phase), and it avoids
+A's per-widget routing arm (`Msg::Edit`). Worth revisiting a store for
+Viewport-style scroll later — but text input is app data, and B forces the
+app to either mirror it (the echo) or query the store (breaking view purity).
+
+### API design rules learned (bind for v2)
+
+3. **`AnyElement` must carry a lifetime.** A strict-Elm text area renders
+   from `&TextAreaState` in the model; the previous implicit `'static` was
+   an artifact of Ports 1–2 cloning small strings. Now
+   `AnyElement<'a, Msg> = Box<dyn Element<Msg> + 'a>`, `ElementExt::any`
+   generic over `'a` with `Self: 'a`. The tail is built/rendered/dropped in
+   one frame, so model borrows are naturally scoped. Old ports annotate
+   `'static` and needed no other changes.
+4. **The blanket `Fluent` impl paid off**: `Keymap` got `.when(cond, ...)`
+   conditional bindings for free — conditional Tab policy is one combinator.
+5. **`Element` grew `fn cursor(&self, area) -> Option<(u16, u16)>`** — the
+   focused-cursor runtime contract, settled naturally by this port.
+
+### Open points for the real implementation
+
+- `Keymap` stores `Msg` values, so `Msg: Clone` (hence the `EditEvent`
+  wrapper for the raw-event variant). Alternative: store `Fn() -> Msg`
+  constructors. Decide with the runtime.
+- Two conditional Tab bindings can theoretically both be active; keymap
+  needs documented precedence (first-match-wins in declaration order is the
+  obvious rule).
 
 ## Port 4: driver-loop sketch (`update`/`push`/`spawn`) — TODO

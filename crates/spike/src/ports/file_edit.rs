@@ -16,7 +16,7 @@ use crate::fixtures::*;
 use crate::ports::agent_turn::Msg;
 use crate::ui::*;
 
-type El = AnyElement<Msg>;
+type El = AnyElement<'static, Msg>;
 
 /// File edit tool call with diff preview.
 pub fn file_edit_tool_view(

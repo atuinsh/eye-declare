@@ -16,8 +16,10 @@ use crate::ui::*;
 /// Placeholder app message type. These views are display-only and never emit.
 pub enum Msg {}
 
-/// Type-erased element alias, for heterogeneous match arms.
-type El = AnyElement<Msg>;
+/// Type-erased element alias, for heterogeneous match arms. These views
+/// clone their strings, so `'static` is accurate here; borrowing views
+/// (Port 3) use the lifetime.
+type El = AnyElement<'static, Msg>;
 
 /// Max output lines shown for a shell command preview.
 const MAX_SHELL_PREVIEW_LINES: u16 = 5;
