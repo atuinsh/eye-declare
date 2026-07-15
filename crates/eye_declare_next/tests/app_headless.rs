@@ -48,7 +48,7 @@ impl App for Echo {
     type Msg = Msg;
     type Output = Outcome;
 
-    fn update(&mut self, msg: Msg, ctx: &mut Ctx<'_, Outcome>) {
+    fn update(&mut self, msg: Msg, ctx: &mut Ctx<'_, Self>) {
         match msg {
             Msg::Typed(c) => self.typed.push(c),
             Msg::Backspace => {
@@ -201,7 +201,7 @@ fn borrowed_blocks_push_cleanly() {
         type Msg = ();
         type Output = ();
 
-        fn update(&mut self, _msg: (), ctx: &mut Ctx<'_, ()>) {
+        fn update(&mut self, _msg: (), ctx: &mut Ctx<'_, Self>) {
             let events = std::mem::take(&mut self.events);
             ctx.push(col().children(events.iter().map(|e| text(e.as_str()).pad_left(2))));
             self.done = true;

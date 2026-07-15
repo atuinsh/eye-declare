@@ -29,7 +29,7 @@ impl App for Echo {
     type Msg = Msg;
     type Output = usize;
 
-    fn update(&mut self, msg: Msg, ctx: &mut Ctx<'_, usize>) {
+    fn update(&mut self, msg: Msg, ctx: &mut Ctx<'_, Self>) {
         match msg {
             Msg::Typed(c) => self.typed.push(c),
             Msg::Backspace => {

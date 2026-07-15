@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::app::{App, Ctx};
 use crate::element::Element;
 use crate::input::InputEvent;
+use crate::task::Effect;
 use crate::timeline::Timeline;
 
 /// The pure core of the run loop: dispatch → update → flush pushes →
@@ -19,6 +20,7 @@ pub struct Runtime<A: App> {
     app: A,
     timeline: Timeline,
     animate: Option<Duration>,
+    effects: Vec<Effect<A::Msg>>,
 }
 
 impl<A: App> Runtime<A>
@@ -30,6 +32,7 @@ where
             app,
             timeline: Timeline::new(width, terminal_height),
             animate: None,
+            effects: Vec::new(),
         }
     }
 
@@ -50,6 +53,7 @@ where
         let mut ctx = Ctx {
             timeline: &mut self.timeline,
             output: &mut bytes,
+            effects: &mut self.effects,
             exit: None,
         };
         self.app.update(msg, &mut ctx);
@@ -60,6 +64,13 @@ where
             bytes.extend_from_slice(&self.timeline.finalize());
         }
         (bytes, exit)
+    }
+
+    /// Effects queued by `update` (spawned streams), for the driver to
+    /// execute. Drain after every [`handle`](Runtime::handle) /
+    /// [`process`](Runtime::process).
+    pub fn take_effects(&mut self) -> Vec<Effect<A::Msg>> {
+        std::mem::take(&mut self.effects)
     }
 
     /// Re-present the live tail (also called on animation ticks).
@@ -118,6 +129,7 @@ where
             match crossterm::event::read()? {
                 Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                     let (bytes, exit) = runtime.handle(InputEvent::Key(k));
+                    reject_effects(&mut runtime)?;
                     if let Some(output) = exit {
                         stdout.write_all(&bytes)?;
                         stdout.flush()?;
@@ -127,6 +139,7 @@ where
                 }
                 Event::Paste(s) => {
                     let (bytes, exit) = runtime.handle(InputEvent::Paste(s));
+                    reject_effects(&mut runtime)?;
                     if let Some(output) = exit {
                         stdout.write_all(&bytes)?;
                         stdout.flush()?;
@@ -149,11 +162,27 @@ where
     }
 }
 
+/// The sync loop can't execute async work — surface the mistake loudly
+/// instead of silently dropping the app's spawned streams.
+fn reject_effects<A: App>(runtime: &mut Runtime<A>) -> io::Result<()>
+where
+    A::Msg: Clone,
+{
+    if runtime.take_effects().is_empty() {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "app spawned async work (ctx.spawn/perform); drive it with the tokio runtime \
+             (eye_declare_next::tokio_driver::run) instead of the sync run()",
+        ))
+    }
+}
+
 /// Restores the terminal on drop, including panic unwind.
-struct RawModeGuard;
+pub(crate) struct RawModeGuard;
 
 impl RawModeGuard {
-    fn enable() -> io::Result<Self> {
+    pub(crate) fn enable() -> io::Result<Self> {
         crossterm::terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
         let _ = crossterm::execute!(stdout, crossterm::event::EnableBracketedPaste);

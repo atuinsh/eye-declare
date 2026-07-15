@@ -10,7 +10,17 @@ publish = false
 [dependencies]
 crossterm = "0.29"
 eye_declare_engine = { path = "../eye_declare_engine" }
+futures-core = "0.3"
 ratatui-core = "0.1"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"], optional = true }
+
+[features]
+default = ["tokio"]
+# The tokio driver (driver_tokio::run). The core stays executor-agnostic;
+# disable for sync-only apps with zero async dependencies.
+tokio = ["dep:tokio", "crossterm/event-stream"]
 
 [dev-dependencies]
 eye_declare_engine = { path = "../eye_declare_engine", features = ["test-util"] }
+futures = "0.3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
