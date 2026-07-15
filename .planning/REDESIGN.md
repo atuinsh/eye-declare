@@ -359,10 +359,17 @@ Still open:
      return cursor-repositioning bytes (the parked-cursor invariant lives in
      the engine now), and the sync `Timeline` runtime (`push`/`present`/
      `finalize`) with conversation-flow tests through the VTE terminal.
-   - Next slices: keymap/focus/events + `App`/`update` loop → async driver
-     (tokio, `spawn`/`Task`/subscriptions, animation self-tick) → widgets
-     (`TextAreaState`, feature-flagged markdown, viewport) → resize story
-     (needs O3 decided).
+   - Slice 3 ✅ (2026-07-15): `Focus`/`FocusHandle` (shared-cell design —
+     single-focus by construction, no runtime registry), `Keymap` with the
+     O2 dispatch order + `map` composition, `App`/`Ctx` (push renders
+     immediately, so blocks may borrow), the headlessly-testable `Runtime`
+     (events in, bytes out) + sync `run()` shell (raw mode guard, animation
+     ticks via poll timeout), `Engine::reset_region` for O3-style resize
+     (committed content keeps the terminal's reflow), and the first
+     runnable app: `cargo run -p eye_declare_next --example echo`.
+   - Next slices: async driver (tokio, `spawn`/`Task`/subscriptions) →
+     widgets (`TextAreaState`, feature-flagged markdown, viewport, borders/
+     `View`-equivalent chrome) → O3/O4 decisions → atuin-ai port (Phase 5).
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
    shadow) delete cleanly and the TUI code shrinks.

@@ -19,13 +19,21 @@
 //! driver (spawn/Task/subscriptions) → widgets (text area, markdown,
 //! viewport).
 
+pub mod app;
 pub mod element;
+pub mod focus;
+pub mod input;
+pub mod runtime;
 pub mod spinner;
 pub mod stack;
 pub mod text;
 pub mod timeline;
 
+pub use app::{App, Ctx};
 pub use element::{AnyElement, Element, ElementExt, Empty, Fluent, Padded, empty};
+pub use focus::{Focus, FocusHandle};
+pub use input::{InputEvent, Key, Keymap, key, keymap};
+pub use runtime::{Runtime, run};
 pub use spinner::{Spinner, spinner};
 pub use stack::{Col, Row, Width, col, row};
 pub use text::{Text, text};

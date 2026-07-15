@@ -220,6 +220,7 @@ dependencies = [
 name = "eye_declare_next"
 version = "0.0.0"
 dependencies = [
+ "crossterm",
  "eye_declare_engine",
  "ratatui-core",
 ]
