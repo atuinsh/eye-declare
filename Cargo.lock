@@ -225,7 +225,10 @@ dependencies = [
  "futures",
  "futures-core",
  "ratatui-core",
+ "ratatui-widgets",
  "tokio",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

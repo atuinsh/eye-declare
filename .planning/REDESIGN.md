@@ -378,9 +378,18 @@ Still open:
      them). `examples/stream.rs` is the mini-agent demo: streaming turn in
      the tail, sealed to scrollback on completion, Esc-cancels via Task
      drop.
-   - Next slices: widgets (`TextAreaState`, feature-flagged markdown,
-     viewport, borders/`View`-equivalent chrome) → subscriptions →
-     O3/O4 decisions → atuin-ai port (Phase 5).
+   - Slice 5 ✅ (2026-07-15): widgets + composition. `TextAreaState` (the
+     strict-Elm input: grapheme-aware editing, display-width cursor,
+     policy keys excluded by design) + borrowing `text_area()` view with
+     placeholder/max-height/focus-tracked cursor; `Panel` border/title/
+     footer chrome with cursor offsetting. `tests/composition.rs` is the
+     Port 3A pattern made real: a reusable PromptBox sub-model (own Msg/
+     update/keymap/view) embedded by enum wrapping + `Keymap::map`, parent
+     claims Submit. `examples/stream.rs` upgraded to the production input
+     shape. Known gap: no soft wrap in the text area yet.
+   - Next slices: markdown (feature-flagged pulldown-cmark) + viewport →
+     subscriptions → text-area soft wrap → O3/O4 decisions → atuin-ai
+     port (Phase 5).
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
    shadow) delete cleanly and the TUI code shrinks.

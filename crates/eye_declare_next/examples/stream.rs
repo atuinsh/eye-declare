@@ -11,16 +11,16 @@ use std::time::Duration;
 
 use crossterm::event::KeyCode;
 use eye_declare_next::{
-    App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, Task, col,
-    driver_tokio, key, keymap, spinner, text,
+    App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, Task,
+    TextAreaState, col, driver_tokio, key, keymap, panel, spinner, text, text_area,
 };
 use futures::StreamExt;
 use ratatui_core::style::{Color, Modifier, Style};
 
 #[derive(Clone)]
 enum Msg {
-    Typed(char),
-    Backspace,
+    Edit(InputEvent),
+    Newline,
     Submit,
     Delta(String),
     Done,
@@ -30,7 +30,7 @@ enum Msg {
 
 struct Agent {
     input_focus: FocusHandle,
-    typed: String,
+    input: TextAreaState,
     response: String,
     streaming: Option<Task>,
 }
@@ -53,15 +53,13 @@ impl App for Agent {
 
     fn update(&mut self, msg: Msg, ctx: &mut Ctx<'_, Self>) {
         match msg {
-            Msg::Typed(c) => self.typed.push(c),
-            Msg::Backspace => {
-                self.typed.pop();
-            }
+            Msg::Edit(ev) => self.input.handle(&ev),
+            Msg::Newline => self.input.insert_newline(),
             Msg::Submit => {
-                if self.typed.trim().is_empty() || self.streaming.is_some() {
+                if self.input.is_blank() || self.streaming.is_some() {
                     return;
                 }
-                let prompt = std::mem::take(&mut self.typed);
+                let prompt = self.input.take_text();
                 ctx.push(
                     col()
                         .child(
@@ -102,10 +100,20 @@ impl App for Agent {
                 )
             })
             .child(
-                text("> ")
-                    .style(Style::default().fg(Color::Cyan))
-                    .span(&*self.typed, Style::default())
-                    .pad_top(1),
+                panel(
+                    text_area(&self.input)
+                        .placeholder("Ask something...")
+                        .placeholder_style(Style::default().fg(Color::DarkGray))
+                        .track_focus(&self.input_focus)
+                        .max_height(5),
+                )
+                .title("Prompt")
+                .title_right("mini-agent")
+                .footer("[Enter] Send  [Shift+Enter] Newline")
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title_style(Style::default().fg(Color::Cyan))
+                .pad_x(1)
+                .pad_top(1),
             )
     }
 
@@ -116,14 +124,13 @@ impl App for Agent {
                 k.on(key(KeyCode::Esc), Msg::CancelTurn)
             })
             .in_scope(&self.input_focus, key(KeyCode::Enter), Msg::Submit)
-            .fallthrough(&self.input_focus, |ev| match ev {
-                InputEvent::Key(k) => match k.code {
-                    KeyCode::Char(c) => Msg::Typed(c),
-                    KeyCode::Backspace => Msg::Backspace,
-                    _ => Msg::Typed(' '),
-                },
-                InputEvent::Paste(s) => Msg::Typed(s.chars().next().unwrap_or(' ')),
-            })
+            .in_scope(&self.input_focus, key(KeyCode::Enter).shift(), Msg::Newline)
+            .in_scope(
+                &self.input_focus,
+                key(KeyCode::Char('j')).ctrl(),
+                Msg::Newline,
+            )
+            .fallthrough(&self.input_focus, Msg::Edit)
     }
 }
 
@@ -150,7 +157,7 @@ async fn main() -> std::io::Result<()> {
 
     driver_tokio::run(Agent {
         input_focus,
-        typed: String::new(),
+        input: TextAreaState::new(),
         response: String::new(),
         streaming: None,
     })
