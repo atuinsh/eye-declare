@@ -143,7 +143,7 @@ pub fn write_relative_move(
 /// It is used for rows that are about to become terminal scrollback: once they
 /// scroll away, the renderer can no longer repaint them, so they must be
 /// emitted as real text before any newline pushes them out of reach.
-pub(crate) fn write_committed_row<'a>(
+pub fn write_committed_row<'a>(
     out: &mut Vec<u8>,
     cells: impl IntoIterator<Item = &'a Cell>,
     cursor: &mut CursorState,

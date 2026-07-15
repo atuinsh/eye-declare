@@ -173,11 +173,12 @@ pub mod insets;
 pub mod cells;
 
 pub(crate) mod context;
-pub(crate) mod escape;
-pub(crate) mod frame;
 pub(crate) mod node;
 pub(crate) mod renderer;
-pub(crate) mod wrap;
+
+// Extracted to the engine crate (redesign Phase 2); module re-exports keep
+// existing `crate::{escape, frame, wrap}` paths working unchanged.
+pub(crate) use eye_declare_engine::{escape, frame, wrap};
 
 pub use app::{
     Application, ApplicationBuilder, CommittedElement, ControlFlow, CtrlCBehavior, Handle,
