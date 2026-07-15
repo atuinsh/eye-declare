@@ -217,6 +217,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "eye_declare_next"
+version = "0.0.0"
+dependencies = [
+ "eye_declare_engine",
+ "ratatui-core",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
