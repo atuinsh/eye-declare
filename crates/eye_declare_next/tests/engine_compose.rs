@@ -85,7 +85,7 @@ fn commit_block_above_live_tail() {
     let block_height = block.height(width);
     let stacked = col().child(block).child(text("> input"));
     term.feed(&engine.present(to_frame(&stacked, width), None));
-    engine.commit_scrolled(block_height);
+    term.feed(&engine.commit_scrolled(block_height));
 
     assert_eq!(term.viewport_lines()[0], "you: hi");
     assert_eq!(term.viewport_lines()[1], "> input");

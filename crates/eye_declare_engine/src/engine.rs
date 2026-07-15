@@ -3,6 +3,9 @@
 //! `InlineRenderer` (Phase 2, step 2) — that type now delegates all
 //! terminal mechanics here and keeps only the component-tree concerns.
 
+use ratatui_core::buffer::Buffer;
+use ratatui_core::layout::Rect;
+
 use crate::escape::CursorState;
 use crate::frame::Frame;
 
@@ -203,18 +206,55 @@ impl Engine {
         b"\x1b[2J\x1b[H".to_vec()
     }
 
-    /// Drop the top `committed_height` rows from tracking: they have fully
-    /// scrolled into terminal scrollback and will never be repainted.
-    /// Subsequent diffs only cover the remaining active region.
-    pub fn commit_scrolled(&mut self, committed_height: u16) {
+    /// Commit finished rows above the live tail (the v2 timeline surface).
+    ///
+    /// Stacks `rows` on top of the current tail (the previous frame) and
+    /// presents the combined frame — so growth, burst streaming into
+    /// scrollback, and diffing all go through the verified present path —
+    /// then shifts the committed rows out of tracking via
+    /// [`commit_scrolled`](Engine::commit_scrolled). From the next present
+    /// on, the committed rows behave like any earlier terminal output:
+    /// unaddressable, immutable, drifting into scrollback naturally.
+    pub fn commit(&mut self, rows: &Buffer) -> Vec<u8> {
+        let committed_height = rows.area.height;
         if committed_height == 0 {
-            return;
+            return Vec::new();
         }
+
+        let tail = self.prev_frame.as_ref().map(|f| f.buffer().clone());
+        let stacked = vstack(rows, tail.as_ref(), self.width);
+        let mut output = self.present(Frame::new(stacked), None);
+        output.extend_from_slice(&self.commit_scrolled(committed_height));
+        output
+    }
+
+    /// Drop the top `committed_height` rows from tracking: a pure origin
+    /// shift — those rows become unaddressable and will never be repainted.
+    /// Subsequent diffs only cover the remaining active region.
+    ///
+    /// Invariant: the physical cursor must sit at or below the new origin
+    /// when the shift happens, or region coordinates would desync from the
+    /// terminal. If the cursor is parked above (e.g. the presenting frame's
+    /// cursor hint pointed into the committed rows), this emits a relative
+    /// move down to the new origin first — hence the returned bytes, which
+    /// are empty in the common case.
+    #[must_use]
+    pub fn commit_scrolled(&mut self, committed_height: u16) -> Vec<u8> {
+        if committed_height == 0 {
+            return Vec::new();
+        }
+
+        let mut output = Vec::new();
+        if self.cursor.row < committed_height {
+            crate::escape::write_relative_move(&mut output, &mut self.cursor, committed_height, 0);
+        }
+
         if let Some(ref prev) = self.prev_frame {
             self.prev_frame = Some(prev.slice_top_rows(committed_height));
         }
         self.emitted_rows = self.emitted_rows.saturating_sub(committed_height);
         self.cursor.row = self.cursor.row.saturating_sub(committed_height);
+        output
     }
 
     /// Reclaim trailing blank rows after the frame has shrunk.
@@ -319,5 +359,104 @@ impl Engine {
             // No cursor hint — hide cursor
             output.extend_from_slice(b"\x1b[?25l");
         }
+    }
+}
+
+/// Stack `top` above `bottom` in a fresh buffer of the given width.
+fn vstack(top: &Buffer, bottom: Option<&Buffer>, width: u16) -> Buffer {
+    let top_h = top.area.height;
+    let bottom_h = bottom.map_or(0, |b| b.area.height);
+    let mut out = Buffer::empty(Rect::new(0, 0, width, top_h.saturating_add(bottom_h)));
+    copy_into(&mut out, top, 0);
+    if let Some(bottom) = bottom {
+        copy_into(&mut out, bottom, top_h);
+    }
+    out
+}
+
+fn copy_into(dst: &mut Buffer, src: &Buffer, y_offset: u16) {
+    for y in 0..src.area.height {
+        for x in 0..src.area.width.min(dst.area.width) {
+            dst[(x, y + y_offset)] = src[(src.area.x + x, src.area.y + y)].clone();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buffer_with_lines(width: u16, lines: &[&str]) -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, lines.len() as u16));
+        for (y, line) in lines.iter().enumerate() {
+            buf.set_stringn(
+                0,
+                y as u16,
+                line,
+                width as usize,
+                ratatui_core::style::Style::default(),
+            );
+        }
+        buf
+    }
+
+    #[test]
+    fn commit_scrolled_is_silent_when_cursor_below_origin() {
+        let mut engine = Engine::new(10, 24);
+        let _ = engine.present(Frame::new(buffer_with_lines(10, &["aaa", "bbb"])), None);
+        // Cursor ended on the last diffed row (row 1), at/below origin 1.
+        let bytes = engine.commit_scrolled(1);
+        assert!(bytes.is_empty());
+        assert_eq!(engine.emitted_rows(), 1);
+    }
+
+    #[test]
+    fn commit_scrolled_moves_cursor_parked_in_committed_rows() {
+        let mut engine = Engine::new(10, 24);
+        // Cursor hint parks the physical cursor at the very top row.
+        let _ = engine.present(
+            Frame::new(buffer_with_lines(10, &["aaa", "bbb"])),
+            Some((0, 0)),
+        );
+        let bytes = engine.commit_scrolled(1);
+        assert!(
+            !bytes.is_empty(),
+            "cursor above the new origin must be moved down before the shift"
+        );
+        assert_eq!(engine.cursor.row, 0, "cursor is at the new origin");
+        assert_eq!(engine.emitted_rows(), 1);
+    }
+
+    #[test]
+    fn commit_stacks_rows_above_tail_and_shrinks_tracking() {
+        let mut engine = Engine::new(10, 24);
+        let _ = engine.present(Frame::new(buffer_with_lines(10, &["> tail"])), None);
+
+        let _ = engine.commit(&buffer_with_lines(10, &["block one", "block two"]));
+
+        // Tracking covers only the tail again; the block is gone from
+        // the engine's world.
+        assert_eq!(engine.emitted_rows(), 1);
+        let prev = engine.prev_frame.as_ref().unwrap();
+        assert_eq!(prev.area().height, 1);
+        assert_eq!(prev.buffer()[(0, 0)].symbol(), ">");
+    }
+
+    #[test]
+    fn commit_with_empty_rows_is_a_no_op() {
+        let mut engine = Engine::new(10, 24);
+        let _ = engine.present(Frame::new(buffer_with_lines(10, &["> tail"])), None);
+        let bytes = engine.commit(&Buffer::empty(Rect::new(0, 0, 10, 0)));
+        assert!(bytes.is_empty());
+        assert_eq!(engine.emitted_rows(), 1);
+    }
+
+    #[test]
+    fn commit_before_any_present_works() {
+        let mut engine = Engine::new(10, 24);
+        let _ = engine.commit(&buffer_with_lines(10, &["hello"]));
+        assert_eq!(engine.emitted_rows(), 0);
+        let prev = engine.prev_frame.as_ref().unwrap();
+        assert_eq!(prev.area().height, 0);
     }
 }

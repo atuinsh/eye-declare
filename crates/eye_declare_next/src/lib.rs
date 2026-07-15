@@ -23,8 +23,10 @@ pub mod element;
 pub mod spinner;
 pub mod stack;
 pub mod text;
+pub mod timeline;
 
 pub use element::{AnyElement, Element, ElementExt, Empty, Fluent, Padded, empty};
 pub use spinner::{Spinner, spinner};
 pub use stack::{Col, Row, Width, col, row};
 pub use text::{Text, text};
+pub use timeline::Timeline;

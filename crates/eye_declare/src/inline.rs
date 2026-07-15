@@ -319,8 +319,15 @@ impl InlineRenderer {
         }
 
         // Drop the committed rows from the engine's tracking so subsequent
-        // diffs only cover the active region.
-        self.engine.commit_scrolled(committed_height);
+        // diffs only cover the active region. v1 commits only rows already
+        // in scrollback, and the cursor is never in scrollback, so the
+        // cursor-repositioning bytes the engine can emit are impossible
+        // here.
+        let bytes = self.engine.commit_scrolled(committed_height);
+        debug_assert!(
+            bytes.is_empty(),
+            "v1 commits scrollback-only rows; cursor cannot be above them"
+        );
     }
 
     /// Reclaim trailing blank rows after the frame has shrunk.
