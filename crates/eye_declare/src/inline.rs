@@ -1,10 +1,10 @@
 use std::any::{Any, TypeId};
 use std::time::Duration;
 
+use eye_declare_engine::Engine;
+
 use crate::component::{Component, EventResult, Tracked};
 use crate::element::Elements;
-use crate::escape::CursorState;
-use crate::frame::Frame;
 use crate::node::NodeId;
 use crate::renderer::Renderer;
 
@@ -43,12 +43,10 @@ use crate::renderer::Renderer;
 /// ```
 pub struct InlineRenderer {
     renderer: Renderer,
-    cursor: CursorState,
-    prev_frame: Option<Frame>,
-    /// Total rows we've "claimed" in the terminal so far.
-    emitted_rows: u16,
-    /// Terminal height, used to avoid writing to rows in scrollback.
-    terminal_height: u16,
+    /// Terminal-sync state machine (cursor tracking, row accounting,
+    /// scrollback boundary). Extracted to `eye_declare_engine`; this type
+    /// keeps only the component-tree concerns.
+    engine: Engine,
 }
 
 impl InlineRenderer {
@@ -70,10 +68,7 @@ impl InlineRenderer {
     pub fn new_with_height(width: u16, terminal_height: u16) -> Self {
         Self {
             renderer: Renderer::new(width),
-            cursor: CursorState::new(),
-            prev_frame: None,
-            emitted_rows: 0,
-            terminal_height,
+            engine: Engine::new(width, terminal_height),
         }
     }
 
@@ -221,22 +216,13 @@ impl InlineRenderer {
     ///
     /// Returns escape sequences to write to the terminal.
     pub fn resize(&mut self, new_width: u16) -> Vec<u8> {
-        let mut output = Vec::new();
-
-        // Clear visible screen and home cursor.
-        // \x1b[2J = clear entire screen
-        // \x1b[H  = cursor to row 1, col 1 (home)
-        // This does NOT clear scrollback (\x1b[3J would do that).
-        output.extend_from_slice(b"\x1b[2J\x1b[H");
-
-        // Reset internal state
+        // Clear visible screen, home cursor, drop tracking state.
+        let mut output = self.engine.reset(new_width);
         self.renderer.set_width(new_width);
-        self.cursor = CursorState::new();
-        self.prev_frame = None;
-        self.emitted_rows = 0;
+
         // Update terminal height (resize event gives us width, query for height)
         if let Ok((_, h)) = crossterm::terminal::size() {
-            self.terminal_height = h;
+            self.engine.set_terminal_height(h);
         }
 
         // Do a fresh render
@@ -248,170 +234,25 @@ impl InlineRenderer {
 
     /// Render the current state and return bytes to write to the terminal.
     ///
-    /// Handles height growth: if the frame is taller than before, emits
-    /// newlines to claim new terminal rows before writing the diff.
-    /// Returns an empty Vec if nothing changed.
+    /// Renders the component tree to a frame, then hands it to the
+    /// [`Engine`] to sync: diffing against the previous frame, claiming
+    /// terminal rows for growth, streaming soon-to-scroll rows into
+    /// scrollback, and positioning the hardware cursor at the focused
+    /// component's hint. Returns an empty Vec if nothing changed.
     pub fn render(&mut self) -> Vec<u8> {
-        let new_frame = self.renderer.render();
-        let new_height = new_frame.area().height;
-
-        // First render
-        if self.prev_frame.is_none() {
-            if new_height == 0 {
-                self.prev_frame = Some(new_frame);
-                return Vec::new();
-            }
-
-            // For the first render, we need to claim space and write everything.
-            // Create an empty "previous" frame so diff produces all cells.
-            let empty = Frame::new(ratatui_core::buffer::Buffer::empty(
-                ratatui_core::layout::Rect::new(0, 0, self.renderer.width(), 0),
-            ));
-            let mut diff = new_frame.diff(&empty);
-
-            let mut output = Vec::new();
-            let stream_until = new_height.saturating_sub(self.terminal_height);
-            self.stream_rows_into_scrollback(&new_frame, 0, stream_until, &mut output);
-
-            // Emit newlines to claim rows (minus 1 because the cursor
-            // is already on the first row)
-            let new_rows_needed = new_height.saturating_sub(self.emitted_rows);
-            if new_rows_needed > 0 {
-                let newline_count = if self.emitted_rows == 0 {
-                    new_rows_needed.saturating_sub(1)
-                } else {
-                    new_rows_needed
-                } as usize;
-                if self.emitted_rows > 0 && newline_count > 0 {
-                    output.push(b'\r');
-                    self.cursor.col = 0;
-                }
-                output.resize(output.len() + newline_count, b'\n');
-                self.emitted_rows = new_height;
-                self.cursor.row = new_height.saturating_sub(1);
-                self.cursor.col = 0;
-            }
-
-            // Filter out cells in scrollback (unreachable by cursor)
-            let scrolled_past = self.emitted_rows.saturating_sub(self.terminal_height);
-            diff.retain_visible(scrolled_past);
-
-            let escape_bytes = diff.to_escape_sequences(&mut self.cursor);
-            output.extend_from_slice(&escape_bytes);
-
-            self.append_cursor_position(&mut output);
-            self.prev_frame = Some(new_frame);
-            return output;
-        }
-
-        // Subsequent renders
-        let prev = self.prev_frame.as_ref().unwrap();
-        let mut diff = new_frame.diff(prev);
-
-        if diff.is_empty() && !diff.grew() {
-            // Even if content didn't change, cursor position might have
-            // (e.g., cursor moved within an input field)
-            let mut output = Vec::new();
-            self.append_cursor_position(&mut output);
-            self.prev_frame = Some(new_frame);
-            return output;
-        }
-
-        let mut output = Vec::new();
-        let old_scrolled_past = self.emitted_rows.saturating_sub(self.terminal_height);
-        let new_scrolled_past = new_height.saturating_sub(self.terminal_height);
-        self.stream_rows_into_scrollback(
-            &new_frame,
-            old_scrolled_past,
-            new_scrolled_past,
-            &mut output,
-        );
-
-        // If the frame grew, we may need to claim more terminal rows.
-        // Only emit newlines for rows beyond what we've already claimed —
-        // if the frame previously shrank, some emitted rows are unused
-        // and can absorb part (or all) of the growth without new newlines.
-        let new_rows_needed = new_height.saturating_sub(self.emitted_rows);
-        if new_rows_needed > 0 {
-            // Move cursor to the bottom of our current region first
-            // (it might be somewhere in the middle from the last write)
-            let current_bottom = self.emitted_rows.saturating_sub(1);
-            if self.cursor.row < current_bottom {
-                let down = current_bottom - self.cursor.row;
-                output.extend_from_slice(format!("\x1b[{}B", down).as_bytes());
-            }
-            self.cursor.row = current_bottom;
-
-            // Carriage return to column 0 before emitting newlines.
-            // \x1b[nB (CUD) and \n (LF) only move vertically — neither
-            // resets the column. Without this, cursor.col = 0 would
-            // diverge from the terminal's actual column, causing the
-            // first diff cell on the new row to be written at the wrong
-            // position (wherever the cursor was left after the previous
-            // render's escape sequences).
-            output.push(b'\r');
-            self.cursor.col = 0;
-
-            // Emit newlines to claim new rows
-            output.resize(output.len() + new_rows_needed as usize, b'\n');
-            self.emitted_rows += new_rows_needed;
-            self.cursor.row += new_rows_needed;
-        }
-
-        // Filter out cells in scrollback (unreachable by cursor)
-        let scrolled_past = self.emitted_rows.saturating_sub(self.terminal_height);
-        diff.retain_visible(scrolled_past);
-
-        let escape_bytes = diff.to_escape_sequences(&mut self.cursor);
-        output.extend_from_slice(&escape_bytes);
-
-        self.append_cursor_position(&mut output);
-        self.prev_frame = Some(new_frame);
-        output
-    }
-
-    /// Stream rows that would be in terminal scrollback by the time the
-    /// current frame is fully claimed.
-    ///
-    /// The normal growth path first emits blank newlines and then paints
-    /// visible cells by cursor movement. Rows that scroll out during those
-    /// newlines cannot be reached afterward, so burst appends would leave
-    /// blank terminal scrollback. This method writes those rows as normal
-    /// terminal output before claiming the rest of the frame. It starts at
-    /// the old scrollback boundary, so insertions above a persistent footer
-    /// overwrite the soon-to-scroll visible rows before advancing the terminal.
-    fn stream_rows_into_scrollback(
-        &mut self,
-        frame: &Frame,
-        start: u16,
-        end: u16,
-        output: &mut Vec<u8>,
-    ) {
-        let frame_height = frame.area().height;
-        let end = end.min(frame_height);
-        if start >= end {
-            return;
-        }
-
-        crate::escape::write_relative_move(output, &mut self.cursor, start, 0);
-
-        for row in start..end {
-            frame.write_committed_row(row, output, &mut self.cursor);
-            output.extend_from_slice(b"\r\n");
-            self.cursor.row = row.saturating_add(1);
-            self.cursor.col = 0;
-            self.emitted_rows = self.emitted_rows.max(self.cursor.row.saturating_add(1));
-        }
+        let frame = self.renderer.render();
+        let cursor_hint = self.renderer.cursor_hint();
+        self.engine.present(frame, cursor_hint)
     }
 
     /// How many rows have been emitted to the terminal.
     pub fn emitted_rows(&self) -> u16 {
-        self.emitted_rows
+        self.engine.emitted_rows()
     }
 
     /// Update the known terminal height.
     pub fn set_terminal_height(&mut self, height: u16) {
-        self.terminal_height = height;
+        self.engine.set_terminal_height(height);
     }
 
     /// Get the last rendered height of a node.
@@ -429,7 +270,7 @@ impl InlineRenderer {
         container: NodeId,
         terminal_height: u16,
     ) -> Vec<(usize, Option<String>)> {
-        let scrollback_rows = self.emitted_rows.saturating_sub(terminal_height);
+        let scrollback_rows = self.engine.emitted_rows().saturating_sub(terminal_height);
         if scrollback_rows == 0 {
             return Vec::new();
         }
@@ -477,14 +318,9 @@ impl InlineRenderer {
             self.renderer.remove(child_id);
         }
 
-        // Adjust prev_frame: slice off committed rows
-        if let Some(ref prev) = self.prev_frame {
-            self.prev_frame = Some(prev.slice_top_rows(committed_height));
-        }
-
-        // Adjust emitted_rows and cursor
-        self.emitted_rows = self.emitted_rows.saturating_sub(committed_height);
-        self.cursor.row = self.cursor.row.saturating_sub(committed_height);
+        // Drop the committed rows from the engine's tracking so subsequent
+        // diffs only cover the active region.
+        self.engine.commit_scrolled(committed_height);
     }
 
     /// Reclaim trailing blank rows after the frame has shrunk.
@@ -498,64 +334,7 @@ impl InlineRenderer {
     /// Returns escape sequences to write to the terminal. Returns an
     /// empty Vec if there are no trailing blank rows to reclaim.
     pub fn finalize(&mut self) -> Vec<u8> {
-        let current_height = self
-            .prev_frame
-            .as_ref()
-            .map(|f| f.area().height)
-            .unwrap_or(0);
-
-        if current_height >= self.emitted_rows || self.emitted_rows == 0 {
-            return Vec::new();
-        }
-
-        // Respect the scrollback boundary: rows above `scrolled_past` are
-        // in terminal scrollback and unreachable by cursor movement.  If we
-        // tried to move there the terminal would clamp us, desyncing our
-        // cursor tracking.  Only erase rows we can actually reach.
-        let scrolled_past = self.emitted_rows.saturating_sub(self.terminal_height);
-        let target_row = current_height.max(scrolled_past);
-
-        if target_row >= self.emitted_rows {
-            return Vec::new();
-        }
-
-        let mut output = Vec::new();
-
-        // Position cursor at the first erasable blank row.
-        // Use CR first to clear any pending-wrap state, then CPL
-        // (Cursor Previous Line) which moves up N lines and to
-        // column 0 atomically — more reliable than CUU + CR for
-        // terminals with edge-case wrap behavior.
-        output.extend_from_slice(b"\r");
-        if self.cursor.row > target_row {
-            let up = self.cursor.row - target_row;
-            output.extend_from_slice(format!("\x1b[{}F", up).as_bytes());
-        } else if self.cursor.row < target_row {
-            let down = target_row - self.cursor.row;
-            output.extend_from_slice(format!("\x1b[{}E", down).as_bytes());
-        }
-
-        // Erase from cursor to end of screen
-        output.extend_from_slice(b"\x1b[J");
-
-        self.cursor.row = target_row;
-        self.cursor.col = 0;
-        self.emitted_rows = target_row;
-
-        output
-    }
-
-    /// Append escape sequences to position the terminal cursor at the
-    /// focused component's cursor hint (if any), using relative movement.
-    fn append_cursor_position(&mut self, output: &mut Vec<u8>) {
-        if let Some((col, row)) = self.renderer.cursor_hint() {
-            crate::escape::write_relative_move(output, &mut self.cursor, row, col);
-            // Show cursor at the component's cursor position
-            output.extend_from_slice(b"\x1b[?25h");
-        } else {
-            // No cursor hint — hide cursor
-            output.extend_from_slice(b"\x1b[?25l");
-        }
+        self.engine.finalize()
     }
 }
 
@@ -605,190 +384,7 @@ mod tests {
         }
     }
 
-    struct TestTerminal {
-        parser: vte::Parser,
-        width: usize,
-        height: usize,
-        cursor_row: usize,
-        cursor_col: usize,
-        pending_wrap: bool,
-        viewport: Vec<Vec<char>>,
-        scrollback: Vec<String>,
-    }
-
-    impl TestTerminal {
-        fn new(width: usize, height: usize) -> Self {
-            Self {
-                parser: vte::Parser::new(),
-                width,
-                height,
-                cursor_row: 0,
-                cursor_col: 0,
-                pending_wrap: false,
-                viewport: vec![vec![' '; width]; height],
-                scrollback: Vec::new(),
-            }
-        }
-
-        fn feed(&mut self, bytes: &[u8]) {
-            let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
-            parser.advance(self, bytes);
-            self.parser = parser;
-        }
-
-        fn scrollback_lines(&self) -> Vec<String> {
-            self.scrollback.clone()
-        }
-
-        fn viewport_lines(&self) -> Vec<String> {
-            self.viewport
-                .iter()
-                .map(|line| trimmed_line(line))
-                .collect()
-        }
-
-        fn linefeed(&mut self) {
-            if self.height == 0 {
-                return;
-            }
-            if self.cursor_row + 1 >= self.height {
-                let top = self.viewport.remove(0);
-                self.scrollback.push(trimmed_line(&top));
-                self.viewport.push(vec![' '; self.width]);
-                self.cursor_row = self.height - 1;
-            } else {
-                self.cursor_row += 1;
-            }
-            self.pending_wrap = false;
-        }
-
-        fn put_char(&mut self, c: char) {
-            if self.height == 0 || self.width == 0 {
-                return;
-            }
-            if self.pending_wrap {
-                self.linefeed();
-                self.cursor_col = 0;
-            }
-            self.viewport[self.cursor_row][self.cursor_col] = c;
-            if self.cursor_col + 1 >= self.width {
-                self.pending_wrap = true;
-            } else {
-                self.cursor_col += 1;
-                self.pending_wrap = false;
-            }
-        }
-
-        fn csi_param(params: &vte::Params, default: usize) -> usize {
-            params
-                .iter()
-                .next()
-                .and_then(|values| values.first().copied())
-                .map(usize::from)
-                .filter(|&n| n > 0)
-                .unwrap_or(default)
-        }
-    }
-
-    fn trimmed_line(chars: &[char]) -> String {
-        let mut line: String = chars.iter().collect();
-        while line.ends_with(' ') {
-            line.pop();
-        }
-        line
-    }
-
-    impl vte::Perform for TestTerminal {
-        fn print(&mut self, c: char) {
-            self.put_char(c);
-        }
-
-        fn execute(&mut self, byte: u8) {
-            match byte {
-                b'\r' => {
-                    self.cursor_col = 0;
-                    self.pending_wrap = false;
-                }
-                b'\n' => self.linefeed(),
-                b'\x08' => {
-                    self.cursor_col = self.cursor_col.saturating_sub(1);
-                    self.pending_wrap = false;
-                }
-                _ => {}
-            }
-        }
-
-        fn hook(
-            &mut self,
-            _params: &vte::Params,
-            _intermediates: &[u8],
-            _ignore: bool,
-            _action: char,
-        ) {
-        }
-
-        fn put(&mut self, _byte: u8) {}
-
-        fn unhook(&mut self) {}
-
-        fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {}
-
-        fn csi_dispatch(
-            &mut self,
-            params: &vte::Params,
-            _intermediates: &[u8],
-            _ignore: bool,
-            action: char,
-        ) {
-            let n = Self::csi_param(params, 1);
-            match action {
-                'A' => self.cursor_row = self.cursor_row.saturating_sub(n),
-                'B' => {
-                    self.cursor_row = (self.cursor_row + n).min(self.height.saturating_sub(1));
-                    self.pending_wrap = false;
-                }
-                'C' => {
-                    self.cursor_col = (self.cursor_col + n).min(self.width.saturating_sub(1));
-                    self.pending_wrap = false;
-                }
-                'D' => {
-                    self.cursor_col = self.cursor_col.saturating_sub(n);
-                    self.pending_wrap = false;
-                }
-                'E' => {
-                    self.cursor_row = (self.cursor_row + n).min(self.height.saturating_sub(1));
-                    self.cursor_col = 0;
-                    self.pending_wrap = false;
-                }
-                'F' => {
-                    self.cursor_row = self.cursor_row.saturating_sub(n);
-                    self.cursor_col = 0;
-                    self.pending_wrap = false;
-                }
-                'H' => {
-                    self.cursor_row = 0;
-                    self.cursor_col = 0;
-                    self.pending_wrap = false;
-                }
-                'J' => {
-                    for row in self.cursor_row..self.height {
-                        let start_col = if row == self.cursor_row {
-                            self.cursor_col
-                        } else {
-                            0
-                        };
-                        for col in start_col..self.width {
-                            self.viewport[row][col] = ' ';
-                        }
-                    }
-                }
-                'h' | 'l' | 'm' => {}
-                _ => {}
-            }
-        }
-
-        fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
-    }
+    use eye_declare_engine::test_terminal::TestTerminal;
 
     #[test]
     fn first_render_empty_produces_nothing() {

@@ -13,3 +13,8 @@ ratatui-widgets = { version = "0.3", features = [
   "unstable-rendered-line-info",
 ] }
 unicode-width = "0.2"
+vte = { version = "0.15.0", optional = true }
+
+[features]
+# VTE-backed TestTerminal for snapshot-testing engine output.
+test-util = ["dep:vte"]

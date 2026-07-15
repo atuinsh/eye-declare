@@ -27,7 +27,7 @@ eye_declare_macros = { path = "../eye_declare_macros", version = "0.5.0", option
 typed-builder = "0.23.2"
 
 [dev-dependencies]
-vte = "0.15.0"
+eye_declare_engine = { path = "../eye_declare_engine", features = ["test-util"] }
 
 [features]
 default = ["macros"]

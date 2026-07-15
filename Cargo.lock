@@ -195,7 +195,6 @@ dependencies = [
  "tokio",
  "typed-builder",
  "unicode-width",
- "vte",
 ]
 
 [[package]]
@@ -205,6 +204,7 @@ dependencies = [
  "ratatui-core",
  "ratatui-widgets",
  "unicode-width",
+ "vte",
 ]
 
 [[package]]

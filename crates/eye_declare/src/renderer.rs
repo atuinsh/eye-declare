@@ -1066,11 +1066,6 @@ impl Renderer {
         }
     }
 
-    /// Current rendering width.
-    pub fn width(&self) -> u16 {
-        self.width
-    }
-
     /// Render the component tree into a Frame.
     ///
     /// Recursively measures and renders from the root.

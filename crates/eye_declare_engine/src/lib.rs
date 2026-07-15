@@ -14,6 +14,11 @@
 //! `publish = false` until the extraction completes and the crate is named
 //! for real (spec question O4).
 
+pub mod engine;
 pub mod escape;
 pub mod frame;
+#[cfg(feature = "test-util")]
+pub mod test_terminal;
 pub mod wrap;
+
+pub use engine::Engine;

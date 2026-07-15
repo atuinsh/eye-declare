@@ -177,8 +177,10 @@ pub(crate) mod node;
 pub(crate) mod renderer;
 
 // Extracted to the engine crate (redesign Phase 2); module re-exports keep
-// existing `crate::{escape, frame, wrap}` paths working unchanged.
-pub(crate) use eye_declare_engine::{escape, frame, wrap};
+// existing `crate::{frame, wrap}` paths working unchanged. (`escape` moved
+// too, but no eye_declare code touches it anymore — the engine owns all
+// escape generation.)
+pub(crate) use eye_declare_engine::{frame, wrap};
 
 pub use app::{
     Application, ApplicationBuilder, CommittedElement, ControlFlow, CtrlCBehavior, Handle,
