@@ -424,6 +424,11 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
    shadow) delete cleanly and the TUI code shrinks.
+   **Plan written (2026-07-16):** `.planning/PHASE5-ATUIN-PORT.md` — file-by-file
+   mapping, six port slices, expected library additions (startup effects,
+   keyboard enhancement flags, `Keymap::merge`). Work happens on an atuin
+   branch via Cargo package-rename (`eye_declare = { package =
+   "eye_declare_next", .. }`) so code paths never change at release.
 6. **Flagship example** — ship a generic TUI agent interface connected to
    OpenRouter: real streaming/cancellation/input patterns anyone can copy
    without reading the Atuin source. (Also the natural README demo.)
