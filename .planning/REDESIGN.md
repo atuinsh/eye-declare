@@ -393,10 +393,22 @@ Still open:
      scroll, or truncating). Feature matrix checked (no-default-features,
      markdown-only). Note: markdown parses in both height() and render()
      — memoization is a later optimization if profiling asks.
-   - Next slices: subscriptions (confirmed consumer: Atuin AI wants
-     state-conditional periodic server checks, e.g. Hub session polling
-     while a session is active) → text-area soft wrap → O3/O4 decisions →
-     atuin-ai port (Phase 5) → OpenRouter flagship example (Phase 6).
+   - Slice 7 ✅ (2026-07-16): subscriptions. Core `Subscriptions<Msg>`
+     (keyed `every` + `stream`, `.when()` free via Fluent, first-fire after
+     one interval); driver-side `ActiveSubscriptions::sync` diffs declared
+     vs running (interval change restarts; streams compared by key only)
+     and returns a `SyncReport` for logging/deterministic tests. Wired into
+     `driver_tokio::run` after every update; drop cancels all. Sync `run()`
+     rejects subscribing apps with an actionable error.
+   - Next slices: text-area soft wrap → O3/O4 decisions → atuin-ai port
+     (Phase 5) → OpenRouter flagship example (Phase 6).
+   - Design rule (decided 2026-07-16): `animated()` stays separate from
+     subscriptions even though they share runtime plumbing. Split by who
+     owns the time-varying thing: view-only time dependence (pixels change,
+     model doesn't — spinners) → `animated()`, declared by the widget,
+     leak-proof because it's re-derived from the presented tail; model-
+     evolving time (countdowns, typewriter reveals, polls) → subscription
+     with a Msg through `update`. Animation ticks are not messages.
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
    shadow) delete cleanly and the TUI code shrinks.
