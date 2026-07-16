@@ -429,6 +429,17 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
    keyboard enhancement flags, `Keymap::merge`). Work happens on an atuin
    branch via Cargo package-rename (`eye_declare = { package =
    "eye_declare_next", .. }`) so code paths never change at release.
+   - Port slice 2 ✅ (2026-07-16): input path. tui-textarea kept as the
+     editor — a plain model value + ~50-line Element adapter (RefCell only
+     for measure()'s memoization `&mut`); the ratatui-interop design rule
+     validated in production shape. Keymap policy table fully declarative
+     (Esc/Ctrl+C/Enter/Tab resolve their mode at keymap build); Tab
+     footgun structurally gone (test: `typing_disarms_command_execution`).
+     Submit → FSM; ExitApp executes (suggest→Execute/Insert works e2e);
+     sealed turns `ctx.push` at submit. Library addition shipped on stack
+     layer `mkt/v2-7-port-additions`: `KeyboardProtocol`/`RunOptions` +
+     `run_with` (Shift+Enter). Test lesson: headless harness must feed
+     `handle()`'s bytes to the VTE terminal, not just `present()`'s.
    - Port slice 1 ✅ (2026-07-16, atuin `mkt/ai-eye-declare-v2`): skeleton.
      Dep swapped (versions unified cleanly: ratatui-core 0.1 / crossterm
      0.29 both sides); component layer + `driver.rs` deleted; `AiApp` with
