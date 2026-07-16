@@ -305,13 +305,17 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
 - **O6 — sealing: RESOLVED → `push` suffices.** A sealed turn lands above
   the tail while the input box keeps rendering below; no `push_before`.
 
-Still open:
-
-- **O3 — resize semantics:** committed-is-immutable means still-visible sealed blocks
-  don't re-wrap on width change (v1 re-wraps them). Acceptable? (Matches plain-println
-  behavior; massive simplification.)
-- **O4 — naming:** working names `eye_declare_engine` / `eye_declare_next`; real names
-  (and whether v2 is `eye_declare 1.0` or a rename) decided at the end.
+- **O3 — resize semantics: RESOLVED (2026-07-16) → committed is immutable.**
+  Sealed blocks keep the terminal's own reflow on width change (like any
+  printed output); only the live region erases and repaints
+  (`Engine::reset_region`). App-side recipe for content that should stay
+  resize-responsive: keep it in the tail longer — blocks re-wrap live
+  until pushed.
+- **O4 — naming: RESOLVED (2026-07-16) → v2 ships as `eye_declare 0.<next>.0`**
+  (0.6.0 from today's 0.5.1), replacing the v1 API in the `eye_declare`
+  crate; `1.0.0` once confidence is earned. `eye_declare_next` is a
+  workspace-internal working name that dissolves at release;
+  `eye_declare_engine` publishes alongside.
 - **O7 — RESOLVED → `Element` is `Msg`-free** (built that way in
   `eye_declare_next`; dissolved the `ElementExt<Msg>`/`Fluent` split and
   all `Msg`-inference concerns). Revisit only if mouse support wants
@@ -400,8 +404,16 @@ Still open:
      and returns a `SyncReport` for logging/deterministic tests. Wired into
      `driver_tokio::run` after every update; drop cancels all. Sync `run()`
      rejects subscribing apps with an actionable error.
-   - Next slices: text-area soft wrap → O3/O4 decisions → atuin-ai port
-     (Phase 5) → OpenRouter flagship example (Phase 6).
+   - Slice 8 ✅ (2026-07-16): text-area soft wrap. Character wrapping
+     (grapheme + display-width aware; wide graphemes move whole to the
+     next row), on by default with `.wrap(false)` to truncate. One
+     `wrap_line` function is the single source of truth for layout,
+     height, cursor mapping, and the scroll window, so they cannot
+     disagree. Documented edge: cursor at the end of an exactly-full
+     line clamps to the last cell. Word wrap noted as a drop-in
+     replacement of `wrap_line` if ever wanted.
+   - O3 + O4 resolved (see Open questions). **Phase 4 complete.**
+   - Next: atuin-ai port (Phase 5) → OpenRouter flagship example (Phase 6).
    - Design rule (decided 2026-07-16): `animated()` stays separate from
      subscriptions even though they share runtime plumbing. Split by who
      owns the time-varying thing: view-only time dependence (pixels change,
