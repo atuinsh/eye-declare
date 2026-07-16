@@ -18,12 +18,12 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::app::App;
 use crate::input::InputEvent;
-use crate::runtime::{RawModeGuard, Runtime};
+use crate::runtime::{RawModeGuard, RunOptions, Runtime};
 use crate::subscription::{SubKind, Subscriptions};
 use crate::task::{Cancel, Effect, MsgStream};
 
 /// Run an app on the attached terminal until it exits, executing spawned
-/// streams on the ambient tokio runtime.
+/// streams on the ambient tokio runtime. Uses default [`RunOptions`].
 ///
 /// Raw mode + bracketed paste are enabled for the duration and restored on
 /// exit (including panic unwind). If stdin closes, returns
@@ -33,12 +33,22 @@ where
     A: App,
     A::Msg: Clone + Send + 'static,
 {
+    run_with(app, RunOptions::default()).await
+}
+
+/// [`run`] with explicit [`RunOptions`] (e.g. the enhanced keyboard
+/// protocol, which apps need to distinguish Shift+Enter from Enter).
+pub async fn run_with<A>(app: A, options: RunOptions) -> io::Result<A::Output>
+where
+    A: App,
+    A::Msg: Clone + Send + 'static,
+{
     let (width, height) = crossterm::terminal::size()?;
     let mut runtime = Runtime::new(app, width, height);
     let (tx, mut rx) = unbounded_channel::<A::Msg>();
     let mut stdout = io::stdout().lock();
 
-    let _guard = RawModeGuard::enable()?;
+    let _guard = RawModeGuard::enable(options.keyboard)?;
 
     let bytes = runtime.present();
     stdout.write_all(&bytes)?;
