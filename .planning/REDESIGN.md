@@ -429,6 +429,15 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
    keyboard enhancement flags, `Keymap::merge`). Work happens on an atuin
    branch via Cargo package-rename (`eye_declare = { package =
    "eye_declare_next", .. }`) so code paths never change at release.
+   - Port slice 1 ✅ (2026-07-16, atuin `mkt/ai-eye-declare-v2`): skeleton.
+     Dep swapped (versions unified cleanly: ratatui-core 0.1 / crossterm
+     0.29 both sides); component layer + `driver.rs` deleted; `AiApp` with
+     the FSM as model; all turn/tool views ported to fluent builders
+     (spike Ports 1–2 were near-drop-in); headless VTE render tests.
+     **716+/3104− — the TUI shrank ~2.4k lines in one slice.** Dormant
+     effect layer behind a crate-level `allow(dead_code)` that the
+     deletion-audit slice removes. Confirmed missing upstream: startup
+     effects (initial prompt + usage fetch), keyboard enhancement flags.
 6. **Flagship example** — ship a generic TUI agent interface connected to
    OpenRouter: real streaming/cancellation/input patterns anyone can copy
    without reading the Atuin source. (Also the natural README demo.)
