@@ -25,7 +25,7 @@ thread ⇄ spawned tasks) into one `App`:
 struct AiApp {
     fsm: AgentFsm,                      // unchanged
     io: IoContext,                      // unchanged (persistence goes async, below)
-    input: TextAreaState,               // replaces Arc<Mutex<TextArea>>
+    input: TextArea<'static>,           // tui-textarea as a plain value (no Arc<Mutex>)
     select: Option<SelectState>,        // permission prompt / model picker cursor
     slash: SlashState,                  // registry + live search results
     usage: Option<UsageSnapshot>,
@@ -115,7 +115,7 @@ declarative — the Tab footgun fix falls out structurally:
 | `tui/view/mod.rs` (1103) | `ai_view` → `tail()` + plain `&data -> impl Element + use<>` view fns; `element!` → fluent builders; every `key:` prop deleted; the diff/write/shell/group views port near-1:1 (already proven in the Phase 1 spike) |
 | `tui/view/turn.rs` | unchanged (pure) |
 | `tui/components/atuin_ai.rs` (143) | **deleted** → `keymap()` |
-| `tui/components/input_box.rs` (220) | **deleted** → `TextAreaState` in model + `panel(text_area(..))` in view + keymap arms; drops the `tui-textarea` dependency |
+| `tui/components/input_box.rs` (220) | **deleted** → tui-textarea's `TextArea` as a plain model value (the `Arc<Mutex<..>>` was v1's fault, not tui-textarea's — under strict Elm it's just a field) + a small `Element` interop adapter (measure/render) + `panel(..)` chrome + keymap arms. Decided 2026-07-16: keep tui-textarea for emacs bindings/undo/kill-ring rather than rebuilding them on `TextAreaState`; this also exercises the ratatui-interop design rule. `TextAreaState` stays the zero-dep built-in for simple apps. |
 | `tui/components/select.rs` (95) | → `SelectState` value + view fn (~30 lines); candidate for promotion into the library during Phase 6 |
 | `tui/components/session_continue.rs` (49) | **deleted** → a `String` computed once at startup |
 | `tui/components/markdown.rs` (210) | **deleted** → `eye_declare::markdown` (already ported) |
