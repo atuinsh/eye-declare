@@ -429,6 +429,16 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
    keyboard enhancement flags, `Keymap::merge`). Work happens on an atuin
    branch via Cargo package-rename (`eye_declare = { package =
    "eye_declare_next", .. }`) so code paths never change at release.
+   - Port slice 3 ✅ (2026-07-16): streaming. Bridge = plain
+     `Stream<Item = Msg>` via `ctx.spawn`; cancel-on-drop deleted the
+     watch-channel protocol *and* the stale-cache-population hazard.
+     Persistence = actor owning `SessionManager` (`&mut self` methods +
+     write ordering → single owning task, no locks — better answer than
+     the plan's Arc guess). Streaming text injects into the tail's
+     TurnBuilder; agent turns seal on Idle, stay live through Error
+     (Retry continues the turn); timeouts = detached `ctx.perform`
+     sleeps. Test seam: `AiApp::headless` (io: Option) — stream flows
+     driven as `Msg::Fsm` events. Tools/permissions next (slice 4).
    - Port slice 2 ✅ (2026-07-16): input path. tui-textarea kept as the
      editor — a plain model value + ~50-line Element adapter (RefCell only
      for measure()'s memoization `&mut`); the ratatui-interop design rule
