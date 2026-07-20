@@ -168,7 +168,15 @@ impl App for Chat {
                     &self.history,
                 )));
             }
-            Msg::Chunk(delta) => self.streaming.push_str(&delta),
+            Msg::Chunk(delta) => {
+                // Cancellation is prompt but asynchronous: a chunk that
+                // was already queued when Esc dropped the Task still
+                // arrives. Validity comes from the model, not from the
+                // assumption that a cancelled stream falls silent.
+                if self.busy() {
+                    self.streaming.push_str(&delta);
+                }
+            }
             Msg::StreamDone => self.finish_reply(None, ctx),
             Msg::StreamFailed(e) => {
                 // Keep whatever streamed before the failure.
@@ -377,15 +385,30 @@ fn chat_stream(
                     yield Msg::StreamDone;
                     return;
                 }
-                if let Ok(event) = serde_json::from_str::<serde_json::Value>(payload)
-                    && let Some(delta) = event["choices"][0]["delta"]["content"].as_str()
-                    && !delta.is_empty()
-                {
-                    yield Msg::Chunk(delta.to_string());
+                // (Full SSE permits one event's data to span several
+                // `data:` fields; chat completion APIs emit one JSON
+                // object per field, so this parser keeps to one line.)
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(payload) {
+                    // A 200 stream can still deliver an error payload
+                    // mid-flight; surface it instead of ending "cleanly"
+                    // with a silently truncated reply.
+                    if let Some(error) = event.get("error") {
+                        let message = error["message"].as_str().unwrap_or("provider error");
+                        yield Msg::StreamFailed(message.to_string());
+                        return;
+                    }
+                    if let Some(delta) = event["choices"][0]["delta"]["content"].as_str()
+                        && !delta.is_empty()
+                    {
+                        yield Msg::Chunk(delta.to_string());
+                    }
                 }
             }
         }
-        yield Msg::StreamDone;
+        // The body ended without `data: [DONE]`: something upstream cut
+        // the stream. The partial reply is kept either way, but the user
+        // should know it may be incomplete.
+        yield Msg::StreamFailed("stream ended before completion".to_string());
     }
 }
 

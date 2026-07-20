@@ -50,6 +50,10 @@ required-features = ["markdown", "tokio"]
 name = "stream"
 required-features = ["tokio"]
 
+[[example]]
+name = "openrouter"
+required-features = ["markdown", "tokio"]
+
 [[test]]
 name = "async_driver"
 required-features = ["tokio"]
