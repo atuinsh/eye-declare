@@ -4,7 +4,6 @@
 //! terminal mechanics here and keeps only the component-tree concerns.
 
 use ratatui_core::buffer::Buffer;
-use ratatui_core::layout::Rect;
 
 use crate::escape::CursorState;
 use crate::frame::Frame;
@@ -208,12 +207,20 @@ impl Engine {
 
     /// Commit finished rows above the live tail (the v2 timeline surface).
     ///
-    /// Stacks `rows` on top of the current tail (the previous frame) and
-    /// presents the combined frame — so growth, burst streaming into
-    /// scrollback, and diffing all go through the verified present path —
-    /// then shifts the committed rows out of tracking via
-    /// [`commit_scrolled`](Engine::commit_scrolled). From the next present
-    /// on, the committed rows behave like any earlier terminal output:
+    /// Presents `rows` as the whole frame — replacing the tail, not
+    /// stacking above it — then shifts them out of tracking via
+    /// [`commit_scrolled`](Engine::commit_scrolled). Presenting the block
+    /// alone is what makes sealing cheap and correct: in the common case
+    /// the block *was* the live tail a moment ago, so identical rows diff
+    /// to nothing and rows already burst-streamed into scrollback are
+    /// never re-emitted. (The earlier stack-above-the-tail formulation
+    /// re-streamed that overlap whenever block + tail exceeded the
+    /// terminal height: the transcript duplicated into scrollback and the
+    /// screen jumped by the block height.)
+    ///
+    /// The region is left empty; callers present the tail again afterward
+    /// (the runtime does so in the same flush). From the next present on,
+    /// the committed rows behave like any earlier terminal output:
     /// unaddressable, immutable, drifting into scrollback naturally.
     pub fn commit(&mut self, rows: &Buffer) -> Vec<u8> {
         let committed_height = rows.area.height;
@@ -221,9 +228,21 @@ impl Engine {
             return Vec::new();
         }
 
-        let tail = self.prev_frame.as_ref().map(|f| f.buffer().clone());
-        let stacked = vstack(rows, tail.as_ref(), self.width);
-        let mut output = self.present(Frame::new(stacked), None);
+        let mut output = self.present(Frame::new(rows.clone()), None);
+
+        // The next region origin is the row below the block. Make it
+        // physically exist with the cursor on it before the shift: an LF
+        // at the screen bottom scrolls one row, elsewhere it only moves
+        // down. This claims exactly the genuinely-new rows.
+        if self.cursor.row < committed_height {
+            output.push(b'\r');
+            self.cursor.col = 0;
+            let down = (committed_height - self.cursor.row) as usize;
+            output.resize(output.len() + down, b'\n');
+            self.cursor.row = committed_height;
+            self.emitted_rows = self.emitted_rows.max(committed_height + 1);
+        }
+
         output.extend_from_slice(&self.commit_scrolled(committed_height));
         output
     }
@@ -362,29 +381,10 @@ impl Engine {
     }
 }
 
-/// Stack `top` above `bottom` in a fresh buffer of the given width.
-fn vstack(top: &Buffer, bottom: Option<&Buffer>, width: u16) -> Buffer {
-    let top_h = top.area.height;
-    let bottom_h = bottom.map_or(0, |b| b.area.height);
-    let mut out = Buffer::empty(Rect::new(0, 0, width, top_h.saturating_add(bottom_h)));
-    copy_into(&mut out, top, 0);
-    if let Some(bottom) = bottom {
-        copy_into(&mut out, bottom, top_h);
-    }
-    out
-}
-
-fn copy_into(dst: &mut Buffer, src: &Buffer, y_offset: u16) {
-    for y in 0..src.area.height {
-        for x in 0..src.area.width.min(dst.area.width) {
-            dst[(x, y + y_offset)] = src[(src.area.x + x, src.area.y + y)].clone();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui_core::layout::Rect;
 
     fn buffer_with_lines(width: u16, lines: &[&str]) -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, lines.len() as u16));
@@ -428,18 +428,39 @@ mod tests {
     }
 
     #[test]
-    fn commit_stacks_rows_above_tail_and_shrinks_tracking() {
+    fn commit_replaces_tail_and_leaves_an_empty_region() {
         let mut engine = Engine::new(10, 24);
         let _ = engine.present(Frame::new(buffer_with_lines(10, &["> tail"])), None);
 
         let _ = engine.commit(&buffer_with_lines(10, &["block one", "block two"]));
 
-        // Tracking covers only the tail again; the block is gone from
-        // the engine's world.
+        // The block is gone from the engine's world; the region is the
+        // single claimed origin row, empty until the caller re-presents
+        // the tail (as the runtime does in the same flush).
         assert_eq!(engine.emitted_rows(), 1);
         let prev = engine.prev_frame.as_ref().unwrap();
-        assert_eq!(prev.area().height, 1);
-        assert_eq!(prev.buffer()[(0, 0)].symbol(), ">");
+        assert_eq!(prev.area().height, 0);
+    }
+
+    #[test]
+    fn commit_of_the_presented_tail_emits_no_content_bytes() {
+        // The seal case: the block IS the previous tail. Nothing needs
+        // repainting — the only bytes claim the new origin row.
+        let mut engine = Engine::new(10, 24);
+        let content = buffer_with_lines(10, &["aaa", "bbb", "ccc"]);
+        let _ = engine.present(Frame::new(content.clone()), None);
+
+        let bytes = engine.commit(&content);
+        let printable: String = String::from_utf8_lossy(&bytes).into_owned();
+        assert!(
+            !printable.contains("aaa") && !printable.contains("ccc"),
+            "sealing identical content must not repaint it, got {printable:?}"
+        );
+        assert!(
+            printable.ends_with("\r\n"),
+            "seal should end by claiming the origin row, got {printable:?}"
+        );
+        assert_eq!(engine.emitted_rows(), 1);
     }
 
     #[test]
@@ -455,7 +476,8 @@ mod tests {
     fn commit_before_any_present_works() {
         let mut engine = Engine::new(10, 24);
         let _ = engine.commit(&buffer_with_lines(10, &["hello"]));
-        assert_eq!(engine.emitted_rows(), 0);
+        // The claimed origin row below the block is the whole region.
+        assert_eq!(engine.emitted_rows(), 1);
         let prev = engine.prev_frame.as_ref().unwrap();
         assert_eq!(prev.area().height, 0);
     }

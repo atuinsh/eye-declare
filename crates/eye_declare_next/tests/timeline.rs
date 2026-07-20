@@ -112,3 +112,54 @@ fn empty_tail_and_finalize_hand_back_to_shell() {
     // shell prompt will land.
     assert_eq!(term.cursor(), (1, 0));
 }
+
+/// The streaming-agent seal shape with a turn taller than the terminal:
+/// the tail grows past the screen (rows burst-stream into scrollback),
+/// then the same content is pushed as a block when the turn completes.
+/// Every line must land in the terminal exactly once — a stale seal path
+/// that re-streams the overlap duplicates the transcript and jumps the
+/// screen by the block height.
+#[test]
+fn sealing_a_tail_taller_than_the_terminal_does_not_duplicate() {
+    let mut tl = Timeline::new(20, 6);
+    let mut term = TestTerminal::new(20, 6);
+
+    let lines: Vec<String> = (0..12).map(|i| format!("reply-line-{i:02}")).collect();
+
+    // Stream: the turn grows row by row, input tail below.
+    term.feed(&tl.present(&text("> ")));
+    for shown in 1..=lines.len() {
+        let turn = lines[..shown].join("\n");
+        term.feed(&tl.present(&col().child(text(turn)).child(text("> "))));
+    }
+
+    // Seal: the finished turn becomes a committed block; tail returns
+    // to just the input.
+    term.feed(&tl.push(text(lines.join("\n"))));
+    term.feed(&tl.present(&text("> ")));
+
+    let all = [term.scrollback_lines(), term.viewport_lines()].concat();
+    for line in &lines {
+        let count = all.iter().filter(|l| *l == line).count();
+        assert_eq!(
+            count, 1,
+            "{line} should appear exactly once, appears {count}×:\n{all:#?}"
+        );
+    }
+
+    // The transcript ends with the tail directly under the last reply
+    // line — no newline burst in between.
+    let last_content = all
+        .iter()
+        .rposition(|l| l == "reply-line-11")
+        .expect("last reply line missing");
+    let tail_row = all
+        .iter()
+        .rposition(|l| l.starts_with('>'))
+        .expect("tail missing");
+    assert_eq!(
+        tail_row,
+        last_content + 1,
+        "tail should sit right below the sealed turn:\n{all:#?}"
+    );
+}
