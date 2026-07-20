@@ -13,7 +13,6 @@ impl Frame {
         Self { buffer }
     }
 
-    #[cfg(test)]
     pub fn buffer(&self) -> &Buffer {
         &self.buffer
     }
@@ -22,7 +21,7 @@ impl Frame {
         self.buffer.area
     }
 
-    pub(crate) fn write_committed_row(
+    pub fn write_committed_row(
         &self,
         row: u16,
         out: &mut Vec<u8>,
@@ -105,11 +104,11 @@ impl Frame {
 /// A set of changed cells between two frames.
 pub struct Diff {
     /// Changed cells: (x, y, new_cell).
-    pub(crate) cells: Vec<(u16, u16, Cell)>,
+    pub cells: Vec<(u16, u16, Cell)>,
     /// The area of the new (current) frame.
-    pub(crate) new_area: Rect,
+    pub new_area: Rect,
     /// The area of the previous frame.
-    pub(crate) prev_area: Rect,
+    pub prev_area: Rect,
 }
 
 impl Frame {

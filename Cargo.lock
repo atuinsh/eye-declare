@@ -187,12 +187,22 @@ name = "eye_declare"
 version = "0.5.1"
 dependencies = [
  "crossterm",
+ "eye_declare_engine",
  "eye_declare_macros",
  "futures",
  "ratatui-core",
  "ratatui-widgets",
  "tokio",
  "typed-builder",
+ "unicode-width",
+]
+
+[[package]]
+name = "eye_declare_engine"
+version = "0.1.0"
+dependencies = [
+ "ratatui-core",
+ "ratatui-widgets",
  "unicode-width",
  "vte",
 ]

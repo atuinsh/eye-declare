@@ -341,7 +341,15 @@ Still open:
 2. **Bake-off** — protocol above; throwaway code, keeper decisions. ✅ (2026-07-14)
 3. **Engine extraction** — `inline`/`frame`/`escape`/`wrap` + `TestTerminal` →
    engine crate with the contract above; pure-refactor PRs; v1 tests keep passing.
-   **← next**
+   ✅ (2026-07-15) `eye_declare_engine` now owns frame diffing, escape
+   generation, wrap measurement, the `Engine` terminal-sync state machine
+   (`present(frame, cursor_hint)` / `reset` / `commit_scrolled` / `finalize`),
+   and `test_terminal::TestTerminal` (behind `test-util`). `InlineRenderer`
+   is a tree-facing wrapper. v1-compat notes: `present` takes whole frames
+   and commit is slice-off-top (`commit_scrolled`) — the v2 append-`commit`
+   surface layers on this in Phase 4; `resync()` doesn't exist yet (`reset`
+   is the clear-and-redraw fallback). No crossterm dependency in the engine.
+   **← Phase 4 next**
 4. **Build the new layer** — new crate, driven by ports of the current `examples/`.
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
