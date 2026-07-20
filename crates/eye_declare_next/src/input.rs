@@ -128,6 +128,16 @@ impl<Msg> Keymap<Msg> {
         self
     }
 
+    /// Append another keymap's bindings. Within each scope tier, earlier
+    /// declarations still win, so a parent that merges a child's keymap
+    /// after its own bindings keeps priority on contested keys — the usual
+    /// composition is `parent_bindings.merge(child.keymap().map(Msg::Child))`.
+    pub fn merge(mut self, other: Keymap<Msg>) -> Self {
+        self.bindings.extend(other.bindings);
+        self.fallthrough.extend(other.fallthrough);
+        self
+    }
+
     /// Re-target to a parent message type (Elm's `Html.map` for keymaps) —
     /// how a sub-model's keymap embeds into the app's.
     pub fn map<M2>(self, f: impl Fn(Msg) -> M2 + Clone + Send + 'static) -> Keymap<M2>
@@ -220,6 +230,21 @@ mod tests {
             }
             InputEvent::Paste(_) => Msg::Edit('P'),
         }
+    }
+
+    #[test]
+    fn merge_appends_and_earlier_declarations_win() {
+        // The composition shape: a child sub-model's keymap, mapped and
+        // merged after the parent's own bindings.
+        let child = keymap()
+            .on(key(KeyCode::Up), Msg::Edit('u'))
+            .on(key(KeyCode::Enter), Msg::Edit('!'));
+        let km = keymap().on(key(KeyCode::Enter), Msg::Submit).merge(child);
+
+        // The child's uncontested binding works…
+        assert_eq!(km.dispatch(&press(KeyCode::Up)), Some(Msg::Edit('u')));
+        // …but on a contested key the parent, declared first, wins.
+        assert_eq!(km.dispatch(&press(KeyCode::Enter)), Some(Msg::Submit));
     }
 
     #[test]
