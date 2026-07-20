@@ -1,0 +1,11 @@
+[package]
+name = "spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Compile-only bake-off spike for the v2 DSL. Never published. See .planning/REDESIGN.md."
+
+[dependencies]
+crossterm = "0.29"
+futures = "0.3"
+ratatui-core = "0.1"
