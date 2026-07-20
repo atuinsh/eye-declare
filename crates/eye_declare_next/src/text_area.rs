@@ -349,7 +349,9 @@ impl Element for TextArea<'_> {
         } else {
             self.state.line_count()
         };
-        (rows as u16).clamp(1, self.max_height)
+        // min() before the cast: content past 65,535 visual rows must
+        // saturate, not wrap around to a tiny height.
+        (rows.min(u16::MAX as usize) as u16).clamp(1, self.max_height)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {

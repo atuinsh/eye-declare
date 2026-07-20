@@ -21,6 +21,13 @@
 //! interval changed restarts; a [`stream`](Subscriptions::stream) is only
 //! ever compared by key — swapping the stream under an unchanged key has
 //! no effect until the key disappears for one update.
+//!
+//! Cancellation is prompt but asynchronous: when a key disappears (or an
+//! interval changes) the old task is cancelled at its next await point,
+//! and one already-queued tick or stream item may still be delivered
+//! afterward. Treat subscription messages like any other input: derive
+//! validity from the model, not from the assumption that a cancelled
+//! source falls silent instantly.
 
 use std::time::Duration;
 
@@ -70,6 +77,9 @@ impl<Msg> Subscriptions<Msg> {
         interval: Duration,
         make: impl Fn() -> Msg + Send + 'static,
     ) -> Self {
+        // A zero interval would complete every sleep immediately and
+        // flood the unbounded channel faster than updates drain it.
+        let interval = interval.max(Duration::from_millis(1));
         self.entries.push((
             key.into(),
             SubKind::Every {
