@@ -424,6 +424,10 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
    shadow) delete cleanly and the TUI code shrinks.
+   ✅ **COMPLETE (2026-07-20).** All four adapters gone with no successors;
+   production TUI code −17% (~780 lines) while gaining a 69-test headless
+   suite. Full verdict + patterns for the docs: `.planning/PHASE5-ATUIN-PORT.md`.
+   **← Phase 6 next: the OpenRouter flagship example.**
    **Plan written (2026-07-16):** `.planning/PHASE5-ATUIN-PORT.md` — file-by-file
    mapping, six port slices, expected library additions (startup effects,
    keyboard enhancement flags, `Keymap::merge`). Work happens on an atuin

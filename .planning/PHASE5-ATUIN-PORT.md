@@ -163,3 +163,36 @@ declarative — the Tab footgun fix falls out structurally:
   `update_tracked` dirty-avoidance tricks, no `exiting` AtomicBool.
 - Esc-cancels-generation is `self.streaming = None`.
 - History renders exactly once (pushed at startup), not every frame.
+
+## Verdict (2026-07-20 — Phase 5 COMPLETE)
+
+All six slices landed on atuin branch `mkt/ai-eye-declare-v2` (6d604c51).
+
+**Success criteria: met.** `DriverEventSender`, `ViewState`/`sync_view_state`,
+the `on_commit` key parsing, and the `active`-prop focus shadow are deleted
+with no successors — along with their support machinery (`UiTurn.id`,
+`TurnBuilder::new_starting_at`, `AppMode`, the `Arc<Mutex<TextArea>>`, the
+blocking driver thread, the watch-channel stream cancellation, and the
+`exiting` AtomicBool).
+
+**Numbers.** v1 TUI layer (tui/ + driver.rs + inline.rs): 4,655 lines with
+~35 lines of tests. v2: 4,649 lines of which ~810 are a headless test suite
+(69 tests driving the full app through the VTE terminal). Production code
+shrank ~780 lines (~17%) while the behavior surface grew (everything v1 did,
+plus regression coverage it never had).
+
+**Library additions the port forced** (all on stack layer
+`mkt/v2-7-port-additions`): `KeyboardProtocol`/`RunOptions`/`run_with`,
+`Keymap::merge`, `App::init` + `Runtime::startup`. Plus one engine fix it
+shook out (on `mkt/v2-3-elements`): `Engine::commit` presents the block
+alone, ending tall-seal transcript duplication.
+
+**Patterns worth documenting** (Phase 7 docs backlog):
+- The persist actor: a single task owning a `&mut`-method resource, fed
+  jobs in channel order — the Elm-shaped answer to serialized IO.
+- The frontier hazard: any app-held index into externally-owned state
+  needs a story for that state shrinking (the /new bug).
+- Interrupt ≠ cancel: detached streams for work whose outcome must
+  survive a user interrupt; `Task` drop for work that shouldn't.
+- Keymap conditionals that grow arms are usually policy the model/FSM
+  already owns (the Esc ladder deletion).
