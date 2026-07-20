@@ -62,6 +62,15 @@ impl Timeline {
         self.engine.present(Frame::new(buf), cursor)
     }
 
+    /// Handle a terminal width change: erase the live region (committed
+    /// blocks above it are untouched — they keep the terminal's own
+    /// reflow, per the committed-is-immutable semantics) and reset
+    /// tracking. Follow with a [`present`](Timeline::present) to repaint
+    /// the tail at the new width.
+    pub fn resize(&mut self, new_width: u16) -> Vec<u8> {
+        self.engine.reset_region(new_width)
+    }
+
     /// Reclaim trailing blank rows for shell handoff (call after a final
     /// `present` of a shrunken or empty tail).
     pub fn finalize(&mut self) -> Vec<u8> {

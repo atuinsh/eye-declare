@@ -359,10 +359,28 @@ Still open:
      return cursor-repositioning bytes (the parked-cursor invariant lives in
      the engine now), and the sync `Timeline` runtime (`push`/`present`/
      `finalize`) with conversation-flow tests through the VTE terminal.
-   - Next slices: keymap/focus/events + `App`/`update` loop → async driver
-     (tokio, `spawn`/`Task`/subscriptions, animation self-tick) → widgets
-     (`TextAreaState`, feature-flagged markdown, viewport) → resize story
-     (needs O3 decided).
+   - Slice 3 ✅ (2026-07-15): `Focus`/`FocusHandle` (shared-cell design —
+     single-focus by construction, no runtime registry), `Keymap` with the
+     O2 dispatch order + `map` composition, `App`/`Ctx` (push renders
+     immediately, so blocks may borrow), the headlessly-testable `Runtime`
+     (events in, bytes out) + sync `run()` shell (raw mode guard, animation
+     ticks via poll timeout), `Engine::reset_region` for O3-style resize
+     (committed content keeps the terminal's reflow), and the first
+     runnable app: `cargo run -p eye_declare_next --example echo`.
+   - Slice 4 ✅ (2026-07-15): async driver. `Ctx::spawn` (message streams)
+     and `Ctx::perform` (one-shot futures) collect `Effect`s; `Task` is
+     cancel-on-drop via a hand-rolled waker future, so the core stays
+     executor-agnostic (verified: compiles `--no-default-features`).
+     `driver_tokio::run` multiplexes terminal events, spawned-work
+     messages, and animation ticks; `spawn_effects` is public for custom
+     drivers/tests. Sync `run()` rejects spawning apps with a clear error.
+     Subscriptions deferred to a later slice (nothing Atuin-shaped needs
+     them). `examples/stream.rs` is the mini-agent demo: streaming turn in
+     the tail, sealed to scrollback on completion, Esc-cancels via Task
+     drop.
+   - Next slices: widgets (`TextAreaState`, feature-flagged markdown,
+     viewport, borders/`View`-equivalent chrome) → subscriptions →
+     O3/O4 decisions → atuin-ai port (Phase 5).
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
    shadow) delete cleanly and the TUI code shrinks.

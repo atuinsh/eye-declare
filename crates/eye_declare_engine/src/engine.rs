@@ -187,13 +187,41 @@ impl Engine {
         output
     }
 
+    /// Reset only the managed region for a width change: erase from the
+    /// region's reachable top downward, then drop tracking state. Content
+    /// above the region — committed blocks, in v2 usage — is untouched,
+    /// matching the committed-is-immutable semantics (spec O3): like any
+    /// printed output, it keeps whatever wrapping the terminal's own
+    /// reflow gave it.
+    ///
+    /// Best-effort by nature: the terminal reflowed existing content when
+    /// the width changed, so pre-reflow row arithmetic may be off by the
+    /// reflow delta; the next [`present`](Engine::present) repaints the
+    /// whole region, which bounds any artifact to one frame.
+    pub fn reset_region(&mut self, new_width: u16) -> Vec<u8> {
+        let mut output = Vec::new();
+        // The reachable top of the region (rows above this are in
+        // scrollback and behave as committed regardless).
+        let top = self.emitted_rows.saturating_sub(self.terminal_height);
+        crate::escape::write_relative_move(&mut output, &mut self.cursor, top, 0);
+        output.extend_from_slice(b"\x1b[J");
+
+        self.width = new_width;
+        self.cursor = CursorState::new();
+        self.prev_frame = None;
+        self.emitted_rows = 0;
+        output
+    }
+
     /// Reset for a width change: clear the visible screen (scrollback is
     /// preserved), home the cursor, and drop all tracking state. The caller
     /// should follow up with a fresh [`present`](Engine::present).
     ///
     /// After a width change the terminal has already reflowed existing
     /// content, making cursor tracking invalid; clear-and-redraw is the
-    /// reliable fallback.
+    /// reliable fallback. (v1 semantics — it repaints its whole retained
+    /// tree afterward. v2 callers use [`reset_region`](Engine::reset_region)
+    /// instead, because committed content can never be repainted.)
     pub fn reset(&mut self, new_width: u16) -> Vec<u8> {
         // \x1b[2J = clear entire screen
         // \x1b[H  = cursor to row 1, col 1 (home)
