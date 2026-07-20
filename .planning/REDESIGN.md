@@ -429,6 +429,17 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
    keyboard enhancement flags, `Keymap::merge`). Work happens on an atuin
    branch via Cargo package-rename (`eye_declare = { package =
    "eye_declare_next", .. }`) so code paths never change at release.
+   - Port slice 4 ✅ (2026-07-20): tools + permissions. Shell execution =
+     detached message stream (previews + outcome from one select loop;
+     interrupt ≠ cancel proven by an interrupted-sleep test); file tools
+     inline with snapshot/tracker/diff wiring; permission fast paths sync,
+     resolver via perform, headless resolves Ask (which is the prompt
+     path tests need). First real sub-model: `SelectState` +
+     `Keymap::merge` (added to the library on the port-additions layer,
+     with the earlier-declarations-win contract). Debug lesson repeated:
+     probe, don't guess — "prompt never appears" was capability gating +
+     a wrong field name (`path` vs `file_path`), both found by printing
+     FSM state. Also rebased onto upstream (DisplayRichExt/typed URLs).
    - Port slice 3 ✅ (2026-07-16): streaming. Bridge = plain
      `Stream<Item = Msg>` via `ctx.spawn`; cancel-on-drop deleted the
      watch-channel protocol *and* the stale-cache-population hazard.
