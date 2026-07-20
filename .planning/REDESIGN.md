@@ -486,6 +486,12 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
 6. **Flagship example** — ship a generic TUI agent interface connected to
    OpenRouter: real streaming/cancellation/input patterns anyone can copy
    without reading the Atuin source. (Also the natural README demo.)
+   ✅ **COMPLETE (2026-07-20)** — `examples/openrouter.rs`, one commented
+   file (~380 lines) on stack layer `mkt/v2-9-flagship`: model-as-struct,
+   push-as-effect (init banner / user turn / sealed reply / interrupted
+   partial), Task-drop cancellation, model-driven keymap, spinner showing
+   elapsed via its own animation ticks. Hand-rolled SSE keeps it
+   self-contained. Compile+clippy gated; live-run needs an API key.
 7. **Ship** — naming, docs, migration story for v1 users, decide v1's fate.
 
 Docs backlog (for the ship phase): the component *convention* (state struct

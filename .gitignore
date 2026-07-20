@@ -7,3 +7,4 @@ docs/.undox/
 # Simple Task Master - User tasks are git-ignored
 .simple-task-master/tasks/
 .simple-task-master/lock
+.envrc
