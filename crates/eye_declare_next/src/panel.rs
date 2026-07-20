@@ -70,11 +70,11 @@ impl Panel<'_> {
 
     /// Content area within `area` (inside border + padding).
     fn inner(&self, area: Rect) -> Rect {
-        let inset_x = 1 + self.pad_x;
+        let inset_x = 1u16.saturating_add(self.pad_x);
         Rect::new(
             area.x.saturating_add(inset_x),
             area.y.saturating_add(1),
-            area.width.saturating_sub(inset_x * 2),
+            area.width.saturating_sub(inset_x.saturating_mul(2)),
             area.height.saturating_sub(2),
         )
     }
@@ -123,7 +123,16 @@ impl Element for Panel<'_> {
     }
 
     fn cursor(&self, area: Rect) -> Option<(u16, u16)> {
+        // No chrome, no cursor: an area too small to draw the border (or
+        // with no interior) renders nothing, so the hardware cursor must
+        // not be parked over whatever is behind it.
+        if area.width < 2 || area.height < 2 {
+            return None;
+        }
         let inner = self.inner(area);
+        if inner.width == 0 || inner.height == 0 {
+            return None;
+        }
         self.child.cursor(inner).map(|(col, row)| {
             (
                 col.saturating_add(inner.x - area.x),
@@ -191,5 +200,35 @@ mod tests {
         let area = Rect::new(0, 0, 10, 3);
         // child col 3 + border 1 + pad 1 = 5; row 0 + border 1 = 1
         assert_eq!(el.cursor(area), Some((5, 1)));
+    }
+}
+#[cfg(test)]
+mod cursor_guard_tests {
+    use super::*;
+    use ratatui_core::buffer::Buffer;
+
+    struct CursorAt;
+    impl Element for CursorAt {
+        fn height(&self, _w: u16) -> u16 {
+            1
+        }
+        fn render(&self, _a: Rect, _b: &mut Buffer) {}
+        fn cursor(&self, _a: Rect) -> Option<(u16, u16)> {
+            Some((0, 0))
+        }
+    }
+
+    #[test]
+    fn no_cursor_when_panel_cannot_render() {
+        let p = panel(CursorAt);
+        assert_eq!(p.cursor(Rect::new(0, 0, 1, 1)), None, "smaller than border");
+        assert_eq!(p.cursor(Rect::new(0, 0, 2, 2)), None, "no interior");
+        assert!(p.cursor(Rect::new(0, 0, 10, 3)).is_some());
+    }
+
+    #[test]
+    fn huge_padding_saturates_instead_of_panicking() {
+        let p = panel(CursorAt).pad_x(u16::MAX);
+        assert_eq!(p.cursor(Rect::new(0, 0, 10, 3)), None);
     }
 }

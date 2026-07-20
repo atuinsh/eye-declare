@@ -100,7 +100,10 @@ impl TextAreaState {
         let line = &mut self.lines[self.line];
         let at = byte_at(line, self.col);
         line.insert(at, c);
-        self.col += 1;
+        // Recount instead of incrementing: a combining mark (e.g. U+0301
+        // after `e`) merges into the previous grapheme, so the insertion
+        // may not add a cursor position at all.
+        self.col = grapheme_count(&line[..at + c.len_utf8()]);
     }
 
     /// Insert text at the cursor; newlines split lines.
@@ -473,5 +476,33 @@ mod tests {
             text_area(&s).track_focus(&handle).cursor(area),
             Some((2, 0))
         );
+    }
+}
+#[cfg(test)]
+mod combining_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn press(state: &mut TextAreaState, c: char) {
+        state.handle(&crate::InputEvent::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::NONE,
+        )));
+    }
+
+    #[test]
+    fn combining_mark_merges_without_advancing_cursor() {
+        let mut state = TextAreaState::new();
+        press(&mut state, 'e');
+        assert_eq!(state.cursor(), (0, 1));
+        // U+0301 combines with 'e' into one grapheme: same cursor cell.
+        press(&mut state, '\u{0301}');
+        assert_eq!(state.cursor(), (0, 1), "combining mark must not advance");
+        // One backspace removes the whole grapheme.
+        state.handle(&crate::InputEvent::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )));
+        assert!(state.is_blank());
     }
 }
