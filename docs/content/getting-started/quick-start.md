@@ -1,142 +1,118 @@
 ---
 title: Quick Start
-description: Build your first inline TUI with eye-declare in 5 minutes
+description: A working inline app in about sixty lines
 ---
 
 # Quick Start
 
-This guide walks you through building a small application that displays styled messages and an animated spinner — enough to see how the core pieces fit together.
-
-## The application
-
-We'll build a non-interactive app that:
-
-1. Shows a header
-2. Adds styled messages over time
-3. Shows a spinner while "working"
-4. Exits automatically when done
-
-## Define your state
-
-Start with a struct that holds everything your UI needs:
+The smallest useful app: type a line, press Enter to commit it to the
+terminal, Ctrl+C to quit. Every eye-declare concept appears once.
 
 ```rust
-struct AppState {
-    messages: Vec<(String, Style)>,
-    thinking: bool,
+use crossterm::event::KeyCode;
+use eye_declare::{
+    App, Ctx, Element, Fluent, Focus, FocusHandle, InputEvent, Keymap,
+    col, key, keymap, run, text,
+};
+use ratatui_core::style::{Color, Style};
+
+#[derive(Clone)]
+enum Msg {
+    Typed(char),
+    Backspace,
+    Submit,
+    Quit,
+    // Fallthrough must produce a message; this one means "not for us".
+    Noop,
 }
-```
 
-## Write a view function
+struct Echo {
+    input_focus: FocusHandle,
+    typed: String,
+    submitted: usize,
+}
 
-The view function is a pure function from state to UI. It runs on every state change:
+impl App for Echo {
+    type Msg = Msg;
+    // What `run` returns when the app exits.
+    type Output = usize;
 
-```rust
-use eye_declare::{element, Elements, Spinner, Text};
-use ratatui_core::style::{Color, Modifier, Style};
+    fn update(&mut self, msg: Msg, ctx: &mut Ctx<'_, Self>) {
+        match msg {
+            Msg::Typed(c) => self.typed.push(c),
+            Msg::Backspace => {
+                self.typed.pop();
+            }
+            Msg::Submit => {
+                if !self.typed.is_empty() {
+                    let line = std::mem::take(&mut self.typed);
+                    self.submitted += 1;
+                    // An effect, like println!: this block becomes
+                    // permanent terminal output and never renders again.
+                    ctx.push(
+                        text("✓ ")
+                            .style(Style::default().fg(Color::Green))
+                            .span(line, Style::default()),
+                    );
+                }
+            }
+            Msg::Quit => ctx.exit(self.submitted),
+            Msg::Noop => {}
+        }
+    }
 
-fn app_view(state: &AppState) -> Elements {
-    element! {
-        #(for (text, style) in &state.messages {
-            Text(style: *style) { Span(text: text.clone()) }
-        })
-        #(if state.thinking {
-            Spinner(label: "Processing...")
-        })
+    // The live region: a pure view of the model, rebuilt every frame.
+    fn tail(&self) -> impl Element + '_ {
+        col().child(
+            text("> ")
+                .style(Style::default().fg(Color::Cyan))
+                .span(&*self.typed, Style::default()),
+        )
+    }
+
+    // Keys are data, rebuilt from the model each update.
+    fn keymap(&self) -> Keymap<Msg> {
+        keymap()
+            .on_override(key(KeyCode::Char('c')).ctrl(), Msg::Quit)
+            .in_scope(&self.input_focus, key(KeyCode::Enter), Msg::Submit)
+            .fallthrough(&self.input_focus, |ev| match ev {
+                InputEvent::Key(k) => match k.code {
+                    KeyCode::Char(c) => Msg::Typed(c),
+                    KeyCode::Backspace => Msg::Backspace,
+                    _ => Msg::Noop,
+                },
+                InputEvent::Paste(_) => Msg::Noop,
+            })
     }
 }
-```
 
-Key things to notice:
+fn main() -> std::io::Result<()> {
+    let input_focus = Focus::new().handle();
+    input_focus.focus();
 
-- `element!` returns `Elements` — a list of component descriptions
-- `#(for ...)` iterates over data and produces components for each item
-- `#(if ...)` conditionally includes components
-- `"string literals"` are automatically wrapped in `Text`
-- Components accept props with struct-init syntax: `Spinner(label: "...")`
+    let submitted = run(Echo {
+        input_focus,
+        typed: String::new(),
+        submitted: 0,
+    })?;
 
-## Wire up the Application
-
-`Application` owns your state and manages the render loop. `Handle` lets you send updates from any thread or async task:
-
-```rust
-use eye_declare::Application;
-
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
-    let (mut app, handle) = Application::builder()
-        .state(AppState {
-            messages: vec![],
-            thinking: false,
-        })
-        .view(app_view)
-        .build()?;
-
-    tokio::spawn(async move {
-        // Add a header
-        handle.update(|s| {
-            s.messages.push((
-                "Application demo".into(),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        });
-
-        tokio::time::sleep(Duration::from_millis(800)).await;
-
-        // Start "work"
-        handle.update(|s| {
-            s.messages.push((
-                "Starting background work...".into(),
-                Style::default().fg(Color::Yellow),
-            ));
-            s.thinking = true;
-        });
-
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-
-        // Finish
-        handle.update(|s| {
-            s.thinking = false;
-            s.messages.push((
-                "Done!".into(),
-                Style::default().fg(Color::Green),
-            ));
-        });
-
-        // handle dropped here — app exits when all effects stop
-    });
-
-    app.run().await
+    println!("echoed {submitted} lines");
+    Ok(())
 }
 ```
 
-## What just happened?
+Run it, type a few lines, and scroll up: committed lines are ordinary
+terminal output, indistinguishable from anything printed before the program
+started. That's the entire idea.
 
-1. `Application::builder()` creates a builder that takes your state and view function
-2. `.build()` returns an `Application` and a `Handle`
-3. The spawned task sends state updates through the handle — each `update()` call triggers a re-render
-4. Multiple updates between frames are batched into a single rebuild
-5. `app.run()` runs the event loop until the handle is dropped and all component effects (like the spinner's animation timer) have stopped
+## Where each piece is explained
 
-## Running the examples
-
-The repository includes several examples that demonstrate different patterns:
-
-```sh
-cargo run --example app             # This quick start pattern
-cargo run --example declarative     # View function with element! macro
-cargo run --example chat            # Interactive chat with streaming
-cargo run --example interactive     # Focus, Tab cycling, text input
-cargo run --example lifecycle       # Mount/unmount lifecycle hooks
-cargo run --example agent_sim       # Multi-component agent simulation
-cargo run --example markdown_demo   # Markdown rendering
-cargo run --example terminal_demo   # Sync imperative API
-```
-
-## Next steps
-
-- [The element! macro](../guide/element-macro.md) — full syntax reference
-- [Components](../guide/components.md) — building custom components
-- [Application](../guide/application.md) — the full Application API
+- `ctx.push` and the block lifecycle — [the timeline](../guide/the-timeline.md)
+- `tail`, `col`, `text`, and writing your own elements —
+  [elements and layout](../guide/elements.md)
+- `keymap`, dispatch order, and focus — [input](../guide/input.md)
+- Streaming, background work, and cancellation (this example is entirely
+  synchronous; most real apps aren't) — [async](../guide/async.md)
+- Real input editing: this example hand-rolls character handling to stay
+  small; use the built-in [`text_area`](../reference/widgets.md) (or wrap
+  [tui-textarea](../guide/components.md)) in real apps.
