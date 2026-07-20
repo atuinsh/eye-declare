@@ -77,17 +77,37 @@ where
     /// Feed one message (from the keymap, or — in the async driver — from
     /// tasks and subscriptions).
     pub fn process(&mut self, msg: A::Msg) -> (Vec<u8>, Option<A::Output>) {
-        // Undelivered init bytes come first so init's blocks precede this
-        // update's pushes in scrollback.
+        self.process_batch(std::iter::once(msg))
+    }
+
+    /// Feed a batch of messages, presenting once at the end.
+    ///
+    /// Presenting is O(tail) regardless of how many messages arrived, so
+    /// coalescing ready messages (the async driver drains its channel
+    /// into one batch) collapses a burst of stream chunks into a single
+    /// frame. Stops early if a message exits the app; the remainder is
+    /// dropped, matching a terminated run loop.
+    pub fn process_batch(
+        &mut self,
+        msgs: impl IntoIterator<Item = A::Msg>,
+    ) -> (Vec<u8>, Option<A::Output>) {
+        // Undelivered init bytes come first so init's blocks precede
+        // these updates' pushes in scrollback.
         let mut bytes = std::mem::take(&mut self.pending);
-        let mut ctx = Ctx {
-            timeline: &mut self.timeline,
-            output: &mut bytes,
-            effects: &mut self.effects,
-            exit: None,
-        };
-        self.app.update(msg, &mut ctx);
-        let exit = ctx.exit;
+        let mut exit = None;
+        for msg in msgs {
+            let mut ctx = Ctx {
+                timeline: &mut self.timeline,
+                output: &mut bytes,
+                effects: &mut self.effects,
+                exit: None,
+            };
+            self.app.update(msg, &mut ctx);
+            if let Some(output) = ctx.exit {
+                exit = Some(output);
+                break;
+            }
+        }
 
         bytes.extend_from_slice(&self.present());
         if exit.is_some() {

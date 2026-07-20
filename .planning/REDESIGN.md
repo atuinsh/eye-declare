@@ -493,6 +493,15 @@ Docs backlog (for the ship phase): the component *convention* (state struct
 framework interface), including the history: Elm's components-are-a-trap
 guidance post-0.17 and iced's deprecated Component trait; when to reach for
 `Keymap::map`/enum embedding; parent-claims-policy composition.
+Perf chapter (from the 2026-07-20 pass, numbers in `.planning/PERF.md`):
+the same-frame `RefCell` cache pattern for expensive custom elements
+(elements are rebuilt per frame, so height/render can share work with no
+invalidation story — and note `height()` runs more than once per frame via
+container placement); keep tails bounded (frontier pattern) because
+per-frame cost is O(tail content); message coalescing is automatic in the
+tokio driver, so apps need not debounce streams themselves. Plus the
+Phase 5 verdict's patterns (persist actor, frontier-shrink hazard,
+interrupt ≠ cancel, keymap-arms-are-model-policy).
 
 ## Non-goals
 
