@@ -55,7 +55,10 @@ impl App for Chat {
                 self.request = Some(ctx.spawn(stream(prompt)));   // async work = a stream of Msgs
             }
             Msg::Chunk(delta) if self.request.is_some() => self.reply.push_str(&delta),
-            Msg::Done => ctx.push(markdown(std::mem::take(&mut self.reply))),
+            Msg::Done => {
+                self.request = None;
+                ctx.push(markdown(std::mem::take(&mut self.reply)));
+            }
             Msg::Cancel => self.request = None,                   // Esc-cancels-generation. That's it.
             _ => {}
         }
