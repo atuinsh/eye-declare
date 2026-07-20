@@ -429,6 +429,15 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
    keyboard enhancement flags, `Keymap::merge`). Work happens on an atuin
    branch via Cargo package-rename (`eye_declare = { package =
    "eye_declare_next", .. }`) so code paths never change at release.
+   - Port slice 5 ✅ (2026-07-20): pickers + usage + startup. Library
+     addition `App::init` (runs in `Runtime::new`; pushed bytes precede
+     the first frame via a pending buffer drained by present/process;
+     `Runtime::startup()` delivers init bytes + init exit to drivers).
+     Atuin: initial prompt submits through normal dispatch, stale usage
+     refreshes in the background, /model picker reuses `SelectState`,
+     status bar ported. Design win: the keymap's Esc mode-ladder deleted —
+     `Msg::Cancel` always; the FSM was already the owner of what
+     cancelling means per state. Remaining: slice 6 deletion audit.
    - Port slice 4 ✅ (2026-07-20): tools + permissions. Shell execution =
      detached message stream (previews + outcome from one select loop;
      interrupt ≠ cancel proven by an interrupted-sleep test); file tools
