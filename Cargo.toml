@@ -3,5 +3,4 @@ resolver = "3"
 members = [
     "crates/eye_declare",
     "crates/eye_declare_engine",
-    "crates/spike",
 ]
