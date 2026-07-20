@@ -276,11 +276,14 @@ impl RawModeGuard {
         let keyboard_enhanced = keyboard == KeyboardProtocol::Enhanced
             && crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
         if keyboard_enhanced {
+            // Disambiguation only: it's all Shift+Enter detection needs.
+            // REPORT_EVENT_TYPES would add key-release events, which the
+            // built-in drivers filter but a custom driver feeding
+            // Runtime::handle directly could easily double-dispatch.
             let _ = crossterm::execute!(
                 stdout,
                 crossterm::event::PushKeyboardEnhancementFlags(
                     crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                        | crossterm::event::KeyboardEnhancementFlags::REPORT_EVENT_TYPES
                 )
             );
         }
