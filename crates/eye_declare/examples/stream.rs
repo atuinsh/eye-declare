@@ -1,6 +1,6 @@
 //! A miniature streaming agent — the Atuin AI shape on the v2 stack.
 //!
-//!     cargo run -p eye_declare_next --example stream
+//!     cargo run -p eye_declare --example stream
 //!
 //! Type a prompt, Enter starts a fake agent turn that streams words back;
 //! the streaming text and spinner live in the tail, and the finished turn
@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use crossterm::event::KeyCode;
-use eye_declare_next::{
+use eye_declare::{
     App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, Task,
     TextAreaState, col, driver_tokio, key, keymap, panel, spinner, text, text_area,
 };

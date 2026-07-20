@@ -493,6 +493,12 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
    elapsed via its own animation ticks. Hand-rolled SSE keeps it
    self-contained. Compile+clippy gated; live-run needs an API key.
 7. **Ship** — naming, docs, migration story for v1 users, decide v1's fate.
+   **In progress (2026-07-20):** docs + README rewritten (PR #44); v1 +
+   `eye_declare_macros` deleted (frozen 0.5.1 remains on crates.io; the
+   spike stays as self-contained evidence); `eye_declare_next` renamed to
+   `eye_declare` 0.6.0; engine publishable at 0.1.0. Publish order:
+   engine, then eye_declare. Remaining after merge: publish, re-record
+   the README demo gif, update the atuin branch's dependency line.
 
 Docs backlog (for the ship phase): the component *convention* (state struct
 + optional Msg/update + optional keymap + view fn — functions, not a

@@ -4,8 +4,8 @@
 
 use std::time::Duration;
 
-use eye_declare_next::driver_tokio::{ActiveSubscriptions, SyncReport};
-use eye_declare_next::{App, Ctx, Element, Fluent, Runtime, Subscriptions, text};
+use eye_declare::driver_tokio::{ActiveSubscriptions, SyncReport};
+use eye_declare::{App, Ctx, Element, Fluent, Runtime, Subscriptions, text};
 
 #[derive(Clone)]
 enum Msg {

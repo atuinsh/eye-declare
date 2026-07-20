@@ -2,10 +2,10 @@
 //! timeline, Ctrl+C exits. Watch committed lines scroll into native
 //! scrollback while the prompt stays live.
 //!
-//!     cargo run -p eye_declare_next --example echo
+//!     cargo run -p eye_declare --example echo
 
 use crossterm::event::KeyCode;
-use eye_declare_next::{
+use eye_declare::{
     App, Ctx, Element, Fluent, Focus, FocusHandle, InputEvent, Keymap, col, key, keymap, run,
     spinner, text,
 };

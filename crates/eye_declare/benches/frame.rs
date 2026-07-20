@@ -8,7 +8,7 @@
 mod scenario;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use eye_declare_next::{Element, Runtime};
+use eye_declare::{Element, Runtime};
 use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect;
 use scenario::{ChatApp, HEIGHT, Msg, WIDTH, markdown_response};
@@ -73,7 +73,7 @@ fn typing(c: &mut Criterion) {
     );
     c.bench_function("typing_keystroke", |b| {
         b.iter(|| {
-            black_box(rt.process(Msg::Input(eye_declare_next::InputEvent::Key(key))));
+            black_box(rt.process(Msg::Input(eye_declare::InputEvent::Key(key))));
         });
     });
 }
@@ -104,7 +104,7 @@ fn stages(c: &mut Criterion) {
     c.bench_function("stage_markdown_parse", |b| {
         let source = markdown_response(10_000);
         b.iter(|| {
-            let el = eye_declare_next::markdown(source.clone());
+            let el = eye_declare::markdown(source.clone());
             black_box(el.height(WIDTH))
         });
     });
@@ -115,7 +115,7 @@ trait TailExt {
 }
 impl TailExt for ChatApp {
     fn tail_element(&self) -> Box<dyn Element + '_> {
-        Box::new(eye_declare_next::App::tail(self))
+        Box::new(eye_declare::App::tail(self))
     }
 }
 

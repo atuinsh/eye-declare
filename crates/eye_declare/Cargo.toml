@@ -1,34 +1,64 @@
 [package]
 name = "eye_declare"
-description = "Declarative inline TUI rendering library for Rust"
-repository = "https://github.com/BinaryMuse/eye-declare"
-version = "0.5.1"
+description = "Inline terminal UIs for Rust: timeline-first, Elm-shaped, built on Ratatui"
+repository = "https://github.com/atuinsh/eye-declare"
+version = "0.6.0"
 edition = "2024"
 license = "MIT"
-readme = "../../README.md"
+keywords = ["tui", "terminal", "inline", "cli", "elm"]
+categories = ["command-line-interface"]
 
 [dependencies]
+crossterm = "0.29"
+eye_declare_engine = { version = "0.1.0", path = "../eye_declare_engine" }
+futures-core = "0.3"
+pulldown-cmark = { version = "0.13", default-features = false, optional = true }
 ratatui-core = "0.1"
-ratatui-widgets = { version = "0.3", features = [
-  "unstable-rendered-line-info",
-] }
-crossterm = { version = "0.29", features = ["event-stream"] }
+ratatui-widgets = "0.3"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"], optional = true }
+unicode-segmentation = "1"
 unicode-width = "0.2"
-tokio = { version = "1", features = [
-  "sync",
-  "time",
-  "macros",
-  "rt",
-  "rt-multi-thread",
-] }
-futures = "0.3"
-eye_declare_engine = { path = "../eye_declare_engine" }
-eye_declare_macros = { path = "../eye_declare_macros", version = "0.5.0", optional = true }
-typed-builder = "0.23.2"
-
-[dev-dependencies]
-eye_declare_engine = { path = "../eye_declare_engine", features = ["test-util"] }
 
 [features]
-default = ["macros"]
-macros = ["dep:eye_declare_macros"]
+default = ["markdown", "tokio"]
+# CommonMark rendering via pulldown-cmark (the markdown() element).
+markdown = ["dep:pulldown-cmark"]
+# The tokio driver (driver_tokio::run). The core stays executor-agnostic;
+# disable for sync-only apps with zero async dependencies.
+tokio = ["dep:tokio", "crossterm/event-stream"]
+
+[dev-dependencies]
+async-stream = "0.3"
+criterion = "0.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde_json = "1"
+eye_declare_engine = { path = "../eye_declare_engine", features = ["test-util"] }
+futures = "0.3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+
+# Targets that need non-default feature combinations declare them, so
+# `--all-targets --no-default-features` builds cleanly.
+[[bench]]
+name = "frame"
+harness = false
+required-features = ["markdown", "tokio"]
+
+[[example]]
+name = "perf_report"
+required-features = ["markdown", "tokio"]
+
+[[example]]
+name = "stream"
+required-features = ["tokio"]
+
+[[example]]
+name = "openrouter"
+required-features = ["markdown", "tokio"]
+
+[[test]]
+name = "async_driver"
+required-features = ["tokio"]
+
+[[test]]
+name = "subscriptions"
+required-features = ["tokio"]

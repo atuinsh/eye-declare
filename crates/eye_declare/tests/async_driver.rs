@@ -4,9 +4,9 @@
 
 use std::time::Duration;
 
+use eye_declare::driver_tokio::spawn_effects;
+use eye_declare::{App, Ctx, Element, Runtime, Task, col, text};
 use eye_declare_engine::test_terminal::TestTerminal;
-use eye_declare_next::driver_tokio::spawn_effects;
-use eye_declare_next::{App, Ctx, Element, Runtime, Task, col, text};
 use futures::StreamExt;
 
 #[derive(Clone)]

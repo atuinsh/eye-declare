@@ -268,13 +268,13 @@ where
     if !runtime.take_effects().is_empty() {
         return Err(io::Error::other(
             "app spawned async work (ctx.spawn/perform); drive it with the tokio runtime \
-             (eye_declare_next::driver_tokio::run) instead of the sync run()",
+             (eye_declare::driver_tokio::run) instead of the sync run()",
         ));
     }
     if !runtime.app().subscriptions().is_empty() {
         return Err(io::Error::other(
             "app declares subscriptions; drive it with the tokio runtime \
-             (eye_declare_next::driver_tokio::run) instead of the sync run()",
+             (eye_declare::driver_tokio::run) instead of the sync run()",
         ));
     }
     Ok(())

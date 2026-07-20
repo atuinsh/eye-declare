@@ -1,11 +1,10 @@
 [package]
 name = "eye_declare_engine"
 description = "Inline terminal rendering engine: frame diffing, ANSI escape generation, scrollback-aware output"
-repository = "https://github.com/BinaryMuse/eye-declare"
+repository = "https://github.com/atuinsh/eye-declare"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-publish = false
 
 [dependencies]
 ratatui-core = "0.1"

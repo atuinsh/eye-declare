@@ -1,234 +1,218 @@
-use std::any::TypeId;
+//! The core `Element` trait and universal combinators.
+//!
+//! Elements are `Msg`-free (bake-off O7): they describe structure and
+//! pixels. Message emission lives in the keymap layer, so display code
+//! never names the app's message type and none of the spike's
+//! `Msg`-inference workarounds are needed.
 
-use crate::component::Component;
-use crate::node::{NodeId, WidthConstraint};
-use crate::renderer::Renderer;
+use std::time::Duration;
 
-/// Type-erased component description for the element tree.
+use ratatui_core::buffer::Buffer;
+use ratatui_core::layout::Rect;
+
+/// A renderable piece of UI.
 ///
-/// Users don't implement this directly — implement [`Component`]
-/// instead, which gets `Element` automatically via blanket impl.
-pub(crate) trait Element: Send {
-    fn build(self: Box<Self>, renderer: &mut Renderer, parent: NodeId) -> NodeId;
-    fn update(self: Box<Self>, _renderer: &mut Renderer, _node_id: NodeId) {}
-}
+/// The contract is honest measurement: [`height`](Element::height) must
+/// return exactly the rows [`render`](Element::render) will use at the
+/// given width, and must be cheap — the runtime calls it every frame for
+/// every element in the live tail.
+pub trait Element {
+    /// Rows needed at the given width. Exact, cheap, no side effects.
+    fn height(&self, width: u16) -> u16;
 
-/// Blanket implementation: every Component is automatically an Element.
-///
-/// - **Build**: creates a new node via `append_child` (calls `initial_state()`)
-/// - **Update**: swaps the component on the existing node (preserves state)
-impl<C: Component> Element for C {
-    fn build(self: Box<Self>, renderer: &mut Renderer, parent: NodeId) -> NodeId {
-        renderer.append_child(parent, *self)
+    /// Draw into `area` of `buf`. `area` is sized by the caller from
+    /// [`height`](Element::height) (possibly clamped at the buffer edge).
+    fn render(&self, area: Rect, buf: &mut Buffer);
+
+    /// Frame interval if self-animating (e.g. a live spinner). The runtime
+    /// re-presents the tail at the smallest returned interval while any
+    /// animated element is present.
+    fn animated(&self) -> Option<Duration> {
+        None
     }
 
-    fn update(self: Box<Self>, renderer: &mut Renderer, node_id: NodeId) {
-        renderer.swap_component(node_id, *self);
+    /// Hardware cursor position relative to `area`, when this element is
+    /// focused. `None` hides the cursor.
+    fn cursor(&self, _area: Rect) -> Option<(u16, u16)> {
+        None
     }
 }
 
-/// An entry in an Elements list: a component with optional children.
-pub(crate) struct ElementEntry {
-    pub(crate) element: Box<dyn Element>,
-    pub(crate) children: Option<Elements>,
-    pub(crate) key: Option<String>,
-    pub(crate) type_id: TypeId,
-    pub(crate) width_constraint: WidthConstraint,
-}
+/// A boxed, type-erased element. Heterogeneous match arms converge on this
+/// via [`ElementExt::any`].
+///
+/// Carries a lifetime so views can borrow the app model (bake-off rule 3):
+/// the tail is built, rendered, and dropped within one frame, so model
+/// borrows are naturally scoped. Fully-owned trees are `AnyElement<'static>`.
+pub type AnyElement<'a> = Box<dyn Element + 'a>;
 
-/// A list of component descriptions for declarative tree building.
-///
-/// `Elements` is what view functions return and what the framework
-/// reconciles against the existing component tree. Build one with the
-/// [`element!`](crate::element!) macro or the imperative API:
-///
-/// ```ignore
-/// // With the element! macro (preferred):
-/// fn my_view(state: &MyState) -> Elements {
-///     element! {
-///         "Hello"
-///         #(if state.loading {
-///             Spinner(key: "spinner", label: "Loading...")
-///         })
-///     }
-/// }
-///
-/// // Imperative API:
-/// fn my_view(state: &MyState) -> Elements {
-///     let mut els = Elements::new();
-///     els.add(Text::unstyled("Hello"));
-///     if state.loading {
-///         els.add(Spinner::new("Loading...")).key("spinner");
-///     }
-///     els
-/// }
-/// ```
-pub struct Elements {
-    items: Vec<ElementEntry>,
-}
-
-impl Elements {
-    /// Create an empty element list.
-    pub fn new() -> Self {
-        Self { items: Vec::new() }
+impl Element for Box<dyn Element + '_> {
+    fn height(&self, width: u16) -> u16 {
+        self.as_ref().height(width)
     }
 
-    /// Add a component to the list.
-    ///
-    /// Returns an [`ElementHandle`] that can be used to set a key
-    /// for stable identity across rebuilds.
-    pub fn add<C: Component>(&mut self, component: C) -> ElementHandle<'_> {
-        let type_id = TypeId::of::<C>();
-        self.items.push(ElementEntry {
-            element: Box::new(component),
-            children: None,
-            key: None,
-            type_id,
-            width_constraint: WidthConstraint::default(),
-        });
-        ElementHandle {
-            entry: self.items.last_mut().unwrap(),
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.as_ref().render(area, buf)
+    }
+
+    fn animated(&self) -> Option<Duration> {
+        self.as_ref().animated()
+    }
+
+    fn cursor(&self, area: Rect) -> Option<(u16, u16)> {
+        self.as_ref().cursor(area)
+    }
+}
+
+/// Combinators available on every element.
+pub trait ElementExt: Element + Sized {
+    /// Type-erase, for heterogeneous branches.
+    fn any<'a>(self) -> AnyElement<'a>
+    where
+        Self: 'a,
+    {
+        Box::new(self)
+    }
+
+    /// Offset by `cols` columns of left padding.
+    fn pad_left(self, cols: u16) -> Padded<Self> {
+        Padded {
+            inner: self,
+            left: cols,
+            top: 0,
         }
     }
 
-    /// Add a raw Element implementation (internal use only).
-    ///
-    /// Used by tests that need custom build/update behavior not
-    /// expressible through the Component trait alone.
-    #[allow(dead_code)]
-    pub(crate) fn add_element<E: Element + 'static>(&mut self, element: E) -> ElementHandle<'_> {
-        let type_id = TypeId::of::<E>();
-        self.items.push(ElementEntry {
-            element: Box::new(element),
-            children: None,
-            key: None,
-            type_id,
-            width_constraint: WidthConstraint::default(),
-        });
-        ElementHandle {
-            entry: self.items.last_mut().unwrap(),
+    /// Offset by `rows` rows of top padding.
+    fn pad_top(self, rows: u16) -> Padded<Self> {
+        Padded {
+            inner: self,
+            left: 0,
+            top: rows,
         }
     }
+}
 
-    /// Add a raw Element with nested children (internal use only).
-    #[allow(dead_code)]
-    pub(crate) fn add_element_with_children<E: Element + 'static>(
-        &mut self,
-        element: E,
-        children: Elements,
-    ) -> ElementHandle<'_> {
-        let type_id = TypeId::of::<E>();
-        self.items.push(ElementEntry {
-            element: Box::new(element),
-            children: Some(children),
-            key: None,
-            type_id,
-            width_constraint: WidthConstraint::default(),
-        });
-        ElementHandle {
-            entry: self.items.last_mut().unwrap(),
+impl<E: Element> ElementExt for E {}
+
+/// Conditional-builder combinators, available on every builder type
+/// (elements, keymaps, anything chainable).
+pub trait Fluent: Sized {
+    /// Apply `f` only when `cond` holds.
+    fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
+        if cond { f(self) } else { self }
+    }
+
+    /// Apply `f` with the value when present.
+    fn when_some<T>(self, value: Option<T>, f: impl FnOnce(Self, T) -> Self) -> Self {
+        match value {
+            Some(v) => f(self, v),
+            None => self,
         }
     }
+}
 
-    /// Add a component with nested children.
-    ///
-    /// The component is created first, then children are built as its
-    /// descendants. The component's `children()` method receives
-    /// these as the `slot` parameter.
-    pub fn add_with_children<C: Component>(
-        &mut self,
-        component: C,
-        children: Elements,
-    ) -> ElementHandle<'_> {
-        let type_id = TypeId::of::<C>();
-        self.items.push(ElementEntry {
-            element: Box::new(component),
-            children: Some(children),
-            key: None,
-            type_id,
-            width_constraint: WidthConstraint::default(),
-        });
-        ElementHandle {
-            entry: self.items.last_mut().unwrap(),
+impl<T> Fluent for T {}
+
+/// An element offset by padding. Produced by [`ElementExt::pad_left`] /
+/// [`ElementExt::pad_top`]; stack them for both.
+pub struct Padded<E> {
+    inner: E,
+    left: u16,
+    top: u16,
+}
+
+impl<E: Element> Element for Padded<E> {
+    fn height(&self, width: u16) -> u16 {
+        let inner_width = width.saturating_sub(self.left);
+        if inner_width == 0 {
+            return self.top;
         }
+        self.top.saturating_add(self.inner.height(inner_width))
     }
 
-    /// Add a [`VStack`](crate::VStack) wrapper around the given children.
-    ///
-    /// Equivalent to `add_with_children(VStack, children)`.
-    pub fn group(&mut self, children: Elements) -> ElementHandle<'_> {
-        self.add_with_children(crate::component::VStack, children)
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let inner = Rect::new(
+            area.x.saturating_add(self.left),
+            area.y.saturating_add(self.top),
+            area.width.saturating_sub(self.left),
+            area.height.saturating_sub(self.top),
+        );
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
+        self.inner.render(inner, buf);
     }
 
-    /// Add an [`HStack`](crate::HStack) wrapper around the given children.
-    ///
-    /// Children default to [`WidthConstraint::Fill`].
-    /// Use `.width(WidthConstraint::Fixed(n))` for fixed-width children.
-    pub fn hstack(&mut self, children: Elements) -> ElementHandle<'_> {
-        self.add_with_children(crate::component::HStack, children)
+    fn animated(&self) -> Option<Duration> {
+        self.inner.animated()
     }
 
-    /// Splice another Elements list into this one.
-    ///
-    /// All entries from `other` are appended to this list. This is used
-    /// by the `element!` macro's `#(expr)` syntax to interpolate
-    /// pre-built Elements inline.
-    pub fn splice(&mut self, other: Elements) {
-        self.items.extend(other.items);
-    }
-
-    /// Consume the Elements and return the entries for reconciliation.
-    pub(crate) fn into_items(self) -> Vec<ElementEntry> {
-        self.items
-    }
-}
-
-impl Default for Elements {
-    fn default() -> Self {
-        Self::new()
+    fn cursor(&self, area: Rect) -> Option<(u16, u16)> {
+        let inner = Rect::new(
+            area.x.saturating_add(self.left),
+            area.y.saturating_add(self.top),
+            area.width.saturating_sub(self.left),
+            area.height.saturating_sub(self.top),
+        );
+        self.inner
+            .cursor(inner)
+            .map(|(col, row)| (col.saturating_add(self.left), row.saturating_add(self.top)))
     }
 }
 
-impl Elements {
-    /// Whether this element list is empty.
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
+/// The nothing element: zero height, renders nothing. For match arms and
+/// conditionals with no output.
+pub struct Empty;
+
+pub fn empty() -> Empty {
+    Empty
 }
 
-/// Handle returned by [`Elements::add`] for chaining `.key()` and `.width()`.
-///
-/// This handle has a builder-style API — call methods on it immediately
-/// after adding a component to an [`Elements`] list:
-///
-/// ```ignore
-/// let mut els = Elements::new();
-/// els.add(Spinner::new("loading..."))
-///     .key("my-spinner")
-///     .width(WidthConstraint::Fixed(20));
-/// ```
-pub struct ElementHandle<'a> {
-    entry: &'a mut ElementEntry,
-}
-
-impl<'a> ElementHandle<'a> {
-    /// Set a key for stable identity across rebuilds.
-    ///
-    /// Keyed elements are matched by key during reconciliation,
-    /// allowing them to survive position changes. Without a key,
-    /// elements are matched by position and type.
-    pub fn key(self, key: impl Into<String>) -> Self {
-        self.entry.key = Some(key.into());
-        self
+impl Element for Empty {
+    fn height(&self, _width: u16) -> u16 {
+        0
     }
 
-    /// Set the width constraint for this element within a horizontal container.
-    ///
-    /// Only meaningful when the element is a child of an HStack.
-    /// `Fixed(n)` reserves exactly n columns. `Fill` (default) takes
-    /// remaining space, split equally among Fill siblings.
-    pub fn width(self, constraint: WidthConstraint) -> Self {
-        self.entry.width_constraint = constraint;
-        self
+    fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::text::text;
+
+    #[test]
+    fn empty_is_zero_height() {
+        assert_eq!(Element::height(&empty(), 80), 0);
+    }
+
+    #[test]
+    fn padded_adds_top_rows_and_left_cols() {
+        let el = text("hi").pad_left(2).pad_top(1);
+        assert_eq!(el.height(10), 2); // 1 top pad + 1 text row
+
+        let area = Rect::new(0, 0, 10, 2);
+        let mut buf = Buffer::empty(area);
+        el.render(area, &mut buf);
+        assert_eq!(buf[(2, 1)].symbol(), "h");
+        assert_eq!(buf[(3, 1)].symbol(), "i");
+        assert_eq!(buf[(0, 0)].symbol(), " ");
+    }
+
+    #[test]
+    fn padded_narrows_wrap_width() {
+        // "hello world" wraps at width 6; with pad_left(4) the inner
+        // width at outer width 10 is 6 → 2 rows.
+        let el = text("hello world").pad_left(4);
+        assert_eq!(el.height(10), 2);
+    }
+
+    #[test]
+    fn any_erases_heterogeneous_branches() {
+        let branch =
+            |b: bool| -> AnyElement<'static> { if b { text("yes").any() } else { empty().any() } };
+        assert_eq!(branch(true).height(80), 1);
+        assert_eq!(branch(false).height(80), 0);
     }
 }
