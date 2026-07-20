@@ -1,6 +1,6 @@
 site:
   name: eye-declare
-  description: A declarative inline TUI rendering library for Rust
+  description: Inline terminal UIs for Rust — timeline-first, Elm-shaped
   url: https://eye-declare.dev
   repository: https://github.com/BinaryMuse/eye-declare
 
@@ -17,16 +17,15 @@ sources:
           - getting-started/quick-start.md
       - section: Guide
         items:
-          - guide/element-macro.md
+          - guide/the-timeline.md
+          - guide/elements.md
+          - guide/input.md
+          - guide/async.md
           - guide/components.md
-          - guide/layout.md
-          - guide/lifecycle-hooks.md
-          - guide/events-and-focus.md
-          - guide/context.md
-          - guide/reconciliation.md
-          - guide/application.md
+          - guide/testing.md
+          - guide/performance.md
       - section: Reference
         items:
-          - reference/built-in-components.md
-          - reference/terminal-options.md
-          - reference/imperative-api.md
+          - reference/widgets.md
+          - reference/runtime.md
+          - reference/migration.md

@@ -1,369 +1,122 @@
 ---
-title: Components
-description: Building custom components with #[component], #[props], and the Component trait
+title: Components as a Convention
+description: Reusable UI without a framework interface
 ---
 
-# Components
+# Components as a Convention
 
-Components are the building blocks of an eye-declare UI. Every piece of your interface — from a single line of styled text to a complex multi-part layout — is a component.
+eye-declare has no component trait, and that's a considered position, not a
+gap. A reusable piece of UI here is a *convention* — a bundle of ordinary
+things:
 
-## Function components
-
-The recommended way to define a component is with `#[props]` and `#[component]`:
+- a **state struct** (plain value, lives in the parent's model),
+- optionally a **`Msg` enum and an `update` method**,
+- optionally a **keymap**,
+- a **view function** that borrows the state.
 
 ```rust
-use eye_declare::{component, props, Elements, View, Canvas, Hooks};
-use ratatui_widgets::borders::BorderType;
-
-#[props]
-struct Card {
-    title: String,                  // required — compile error if missing
-    #[default(true)]
-    visible: bool,                  // optional, defaults to true
-    border: Option<BorderType>,     // optional, defaults to None
+// A reusable prompt box. No trait to implement, nothing to register.
+pub struct PromptBox {
+    pub editor: TextAreaState,
+    pub focus: FocusHandle,
 }
 
-#[component(props = Card, children = Elements)]
-fn card(props: &Card, children: Elements) -> Elements {
-    if !props.visible {
-        return Elements::new();
-    }
-    element! {
-        View(border: props.border.unwrap_or(BorderType::Rounded),
-             title: props.title.clone()) {
-            #(children)
+#[derive(Clone)]
+pub enum PromptMsg {
+    Edit(InputEvent),
+    Submit,
+}
+
+impl PromptBox {
+    pub fn update(&mut self, msg: PromptMsg) {
+        match msg {
+            PromptMsg::Edit(ev) => self.editor.handle(&ev),
+            // Submit is *policy* — the parent claims it (below).
+            PromptMsg::Submit => {}
         }
     }
-}
-```
 
-Then use it in `element!`:
+    pub fn keymap(&self) -> Keymap<PromptMsg> {
+        keymap()
+            .in_scope(&self.focus, key(KeyCode::Enter), PromptMsg::Submit)
+            .fallthrough(&self.focus, PromptMsg::Edit)
+    }
 
-```rust
-element! {
-    Card(title: "My Card") {
-        "Card content goes here"
-        Spinner(label: "Loading...")
+    pub fn view(&self) -> impl Element + '_ {
+        panel(text_area(&self.editor).track_focus(&self.focus)).title("Ask")
     }
 }
 ```
 
-### `#[props]`
+## Embedding
 
-Defines the component's props struct. Generates a builder with compile-time
-required field enforcement:
-
-- Fields **without** `#[default]` are required — omitting them in `element!` is a compile error
-- Fields **with** `#[default(expr)]` are optional — the expression is used when not specified
-- All setters accept `impl Into<T>`, so `.into()` is rarely needed in `element!`
+The parent wraps the child's messages in its own enum and re-targets with
+`map`; keymaps compose with `merge`:
 
 ```rust
-#[props]
-struct Badge {
-    label: String,              // required
-    #[default(Color::Green)]
-    color: Color,               // optional
-}
-```
+enum Msg { Prompt(PromptMsg), /* … */ }
 
-### `#[component]`
-
-Transforms a function into a `Component` impl on the props struct. Attributes:
-
-| Attribute | Required | Description |
-|-----------|----------|-------------|
-| `props = Type` | Yes | The props struct (becomes the Component type) |
-| `state = Type` | No | State type, defaults to `()` |
-| `initial_state = expr` | No | Custom initial state (requires `state`) |
-| `children = Elements` | No | Slot children: arbitrary element trees from the parent |
-| `children = DataChildren<T>` | No | Data children: typed child collection via `Into<T>` |
-
-### Function parameters
-
-The function can take these parameters in order:
-
-1. `props: &PropsType` — the component's props (required)
-2. `state: &StateType` — the component's state (if `state` specified)
-3. `hooks: &mut Hooks<PropsType, StateType>` — for declaring behavioral hooks (optional)
-4. `children: Elements` — slot children (if `children = Elements`)
-5. `children: &DataChildren<T>` — data children by reference (if `children = DataChildren<T>`)
-
-### Stateful component with hooks
-
-```rust
-#[derive(Default)]
-struct TimerState {
-    elapsed: u32,
-}
-
-#[props]
-struct Timer {
-    #[default(true)]
-    running: bool,
-}
-
-#[component(props = Timer, state = TimerState)]
-fn timer(props: &Timer, state: &TimerState, hooks: &mut Hooks<Timer, TimerState>) -> Elements {
-    if props.running {
-        hooks.use_interval(Duration::from_secs(1), |_props, s| s.elapsed += 1);
-    }
-
-    element! {
-        Canvas(render_fn: {
-            let text = format!("Elapsed: {}s", state.elapsed);
-            move |area: Rect, buf: &mut Buffer| {
-                Paragraph::new(text.as_str()).render(area, buf);
-            }
-        })
-    }
-}
-```
-
-## Behavioral hooks
-
-In function components, behavioral capabilities are declared through hooks
-rather than trait method overrides:
-
-| Hook | Purpose | Equivalent trait method |
-|------|---------|----------------------|
-| `hooks.use_focusable(true)` | Participate in Tab cycling | `is_focusable()` |
-| `hooks.use_cursor(\|area, props, state\| ...)` | Position cursor when focused | `cursor_position()` |
-| `hooks.use_event(\|event, props, state\| ...)` | Handle events (bubble phase) | `handle_event()` |
-| `hooks.use_event_capture(\|event, props, state\| ...)` | Handle events (capture phase) | `handle_event_capture()` |
-| `hooks.use_layout(Layout::Horizontal)` | Set child layout direction | `layout()` |
-| `hooks.use_width_constraint(Fixed(n))` | Set width in horizontal parent | `width_constraint()` |
-| `hooks.use_height_hint(n)` | Declare fixed height (skip measurement) | `desired_height()` |
-| `hooks.use_autofocus()` | Request focus on mount | — |
-| `hooks.use_interval(dur, \|props, state\| ...)` | Periodic callback | — |
-| `hooks.use_mount(\|props, state\| ...)` | Fire on first build | — |
-| `hooks.use_unmount(\|props, state\| ...)` | Fire on removal | — |
-
-### Example: focusable input with cursor
-
-```rust
-#[props]
-struct InputBox {
-    text: String,
-    #[default(0usize)]
-    cursor: usize,
-}
-
-#[component(props = InputBox)]
-fn input_box(props: &InputBox, hooks: &mut Hooks<InputBox, ()>) -> Elements {
-    hooks.use_focusable(true);
-    hooks.use_autofocus();
-
-    let cursor_pos = props.cursor;
-    hooks.use_cursor(move |area: Rect, _props: &InputBox, _state: &()| {
-        let col = 2 + cursor_pos as u16;
-        if col < area.width.saturating_sub(1) {
-            Some((col, 1))
-        } else {
-            Some((area.width.saturating_sub(2), 1))
+fn update(&mut self, msg: Msg, ctx: &mut Ctx<'_, Self>) {
+    match msg {
+        // The parent claims the child's policy message…
+        Msg::Prompt(PromptMsg::Submit) => {
+            let text = self.prompt.editor.take_text();
+            self.send(text, ctx);
         }
-    });
+        // …and forwards the rest.
+        Msg::Prompt(m) => self.prompt.update(m),
+    }
+}
 
-    let text = props.text.clone();
-    element! {
-        View(border: BorderType::Plain) {
-            Canvas(render_fn: move |area: Rect, buf: &mut Buffer| {
-                let display = if text.is_empty() {
-                    "Type a message...".to_string()
-                } else {
-                    text.clone()
-                };
-                Paragraph::new(display).render(area, buf);
-            }, height: 1u16)
-        }
+fn keymap(&self) -> Keymap<Msg> {
+    my_bindings().merge(self.prompt.keymap().map(Msg::Prompt))
+}
+```
+
+"Parent claims policy" is the load-bearing idea: the child knows *that*
+Enter means submit; only the parent knows *what submitting does*. Pattern
+matching on the wrapped message is the entire mechanism — no output-message
+types, no callback props, no event bubbling.
+
+## Why not a component trait?
+
+The ecosystems that went furthest down the component-object road walked it
+back. Elm removed signals-and-components in favor of "just functions" in
+0.17, and its guidance since has been that nesting Elm-architecture
+triples adds indirection without adding capability. iced deprecated its
+`Component` trait for the same reason. The failure mode is consistent:
+component interfaces force parent↔child message plumbing into the
+framework, where it becomes generic and opaque, when a `match` in the
+parent's update expresses it directly.
+
+The convention keeps everything first-class Rust: sub-model state is
+testable by constructing the struct, its keymap is inspectable data, and
+composition is enum-wrapping you can read.
+
+## Two supporting patterns
+
+**Wrapping stateful Ratatui widgets.** A widget like
+[tui-textarea](https://crates.io/crates/tui-textarea) is already a plain
+value — store it in your model directly and feed it events in `update`.
+The view side is a small `Element` adapter; if the widget measures through
+`&mut self`, a `RefCell` bridges the gap (interior mutability for a cache
+is fine — see [elements](elements.md)):
+
+```rust
+struct Editor<'a>(&'a RefCell<TextArea<'static>>);
+
+impl Element for Editor<'_> {
+    fn height(&self, width: u16) -> u16 {
+        self.0.borrow_mut().measure(width).preferred_rows
+    }
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        (&*self.0.borrow()).render(area, buf);
     }
 }
 ```
 
-## Props vs. State
-
-eye-declare separates data into two categories:
-
-**Props** are fields on the props struct — immutable data set by the parent.
-Use `#[props]` to define them with required/optional field enforcement.
-
-**State** is the associated `State` type — mutable data managed by the framework.
-State is automatically wrapped in `Tracked<S>`, which detects mutations and
-marks the component dirty for re-rendering.
-
-```rust
-#[derive(Default)]
-struct CounterState {
-    count: u32,
-}
-
-#[props]
-struct Counter {
-    #[default("Count".to_string())]
-    label: String,
-}
-
-#[component(props = Counter, state = CounterState)]
-fn counter(props: &Counter, state: &CounterState) -> Elements {
-    element! {
-        Canvas(render_fn: {
-            let text = format!("{}: {}", props.label, state.count);
-            move |area: Rect, buf: &mut Buffer| {
-                Paragraph::new(text.as_str()).render(area, buf);
-            }
-        })
-    }
-}
-```
-
-## Composition patterns
-
-The `view()` method (generated by `#[component]`, or overridden manually)
-receives slot children and returns an element tree. Three patterns:
-
-1. **Pass through** (default) — return `children` unchanged. Layout containers
-   like `VStack` and `HStack` use this.
-
-2. **Wrap children** — incorporate `children` into a larger tree. A `Card`
-   wraps children with borders via `View`.
-
-3. **Generate own tree** — ignore `children` and return custom `Elements`.
-   A status badge generates its own Canvas rendering.
-
-## Accepting slot children
-
-For a component to accept children in `element!` braces, it needs slot
-children support. With `#[component]`, specify `children = Elements`:
-
-```rust
-#[component(props = Panel, children = Elements)]
-fn panel(props: &Panel, children: Elements) -> Elements {
-    // children contains whatever was in the braces
-    children
-}
-```
-
-Without `#[component]`, use the `impl_slot_children!` macro on a manual
-Component impl.
-
-## Accepting data children
-
-Data children let a component accept typed children — useful when the
-component needs structured input rather than arbitrary element trees.
-Define a child enum with `From` conversions, then use `children = DataChildren<T>`:
-
-```rust
-use eye_declare::{component, props, Elements, DataChildren, Canvas};
-
-// Child types
-struct Item { label: String, value: String }
-
-enum TableChild { Item(Item) }
-impl From<Item> for TableChild {
-    fn from(item: Item) -> Self { TableChild::Item(item) }
-}
-
-#[props]
-struct Table {
-    title: String,
-}
-
-#[component(props = Table, children = DataChildren<TableChild>)]
-fn table(props: &Table, children: &DataChildren<TableChild>) -> Elements {
-    // children.as_slice() gives &[TableChild]
-    // ... render items
-}
-```
-
-Usage in `element!`:
-
-```rust
-element! {
-    Table(title: "Info") {
-        Item(label: "OS".into(), value: "macOS".into())
-        Item(label: "Rust".into(), value: "1.86".into())
-    }
-}
-```
-
-Data children are collected via `Into<T>` conversions — any type implementing
-`Into<TableChild>` can be used inside the braces. Invalid child types produce
-a compile error.
-
-Components with data children can also be used without braces:
-
-```rust
-element! {
-    Table(title: "Empty")   // gets default empty DataChildren
-}
-```
-
-## Canvas for raw rendering
-
-`Canvas` is a leaf component for direct buffer access. Use it inside
-`view()` when you need to render with ratatui widgets:
-
-```rust
-element! {
-    Canvas(render_fn: |area: Rect, buf: &mut Buffer| {
-        Paragraph::new("Hello!").render(area, buf);
-    })
-}
-
-// With explicit height (skips probe measurement)
-element! {
-    Canvas(render_fn: |area, buf| { /* draw */ }, height: 3u16)
-}
-```
-
-Canvas is useful for wrapping third-party ratatui widgets, custom charts,
-or any rendering the built-in components don't cover.
-
-## Manual Component impl
-
-For primitive components or advanced use cases, you can implement the
-`Component` trait directly. This is how the built-in components (View,
-Canvas, Spinner, Text) are implemented:
-
-```rust
-#[derive(Default, TypedBuilder)]
-struct Badge {
-    #[builder(default, setter(into))]
-    pub label: String,
-    #[builder(default, setter(into))]
-    pub color: Color,
-}
-
-impl Component for Badge {
-    type State = ();
-
-    fn render(&self, area: Rect, buf: &mut Buffer, _state: &()) {
-        let style = Style::default().fg(self.color);
-        Paragraph::new(Span::styled(&self.label, style)).render(area, buf);
-    }
-}
-```
-
-Most user components should use `#[props]` + `#[component]` instead.
-
-## Component trait reference
-
-The `Component` trait is an implementation detail — `#[component]` generates
-it automatically. Most trait methods are superseded by hooks in function
-components. The only method you might encounter directly is `update()`,
-which `#[component]` overrides to call your function.
-
-| Method | Default | Used by |
-|--------|---------|---------|
-| `update()` | chains `lifecycle()` → `view()` | `#[component]` overrides this |
-| `view()` | passthrough | Default `update()` calls this |
-| `lifecycle()` | no-op | Default `update()` calls this |
-| `render()` | no-op | Primitives only (View, Canvas, Text) |
-| `desired_height()` | `None` | Primitives only; use `use_height_hint` |
-| `content_inset()` | `Insets::ZERO` | Primitives only (View) |
-| `handle_event()` | `Ignored` | Use `use_event` hook |
-| `handle_event_capture()` | `Ignored` | Use `use_event_capture` hook |
-| `is_focusable()` | `false` | Use `use_focusable` hook |
-| `cursor_position()` | `None` | Use `use_cursor` hook |
-| `layout()` | `Vertical` | Use `use_layout` hook |
-| `width_constraint()` | `Fill` | Use `use_width_constraint` hook |
-| `initial_state()` | `State::default()` | Use `initial_state = expr` attribute |
+**The resource actor.** IO that must serialize — a database session whose
+writes must apply in order, say — gets a single owning task fed by a
+channel. `update` sends jobs; the actor applies them in channel order. This
+is the Elm-shaped answer to `&mut`-method resources generally: own the
+resource in one place, talk to it in messages.
