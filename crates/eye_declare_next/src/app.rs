@@ -5,6 +5,7 @@ use futures_core::Stream;
 
 use crate::element::Element;
 use crate::input::Keymap;
+use crate::subscription::Subscriptions;
 use crate::task::{Effect, Task, spawn_effect, spawn_once_effect};
 use crate::timeline::Timeline;
 
@@ -27,6 +28,13 @@ pub trait App: Sized {
     /// conditional on app state.
     fn keymap(&self) -> Keymap<Self::Msg> {
         Keymap::new()
+    }
+
+    /// Declarative recurring inputs, re-derived from the model each update
+    /// and diffed by the driver (see [`Subscriptions`]). Requires an async
+    /// driver.
+    fn subscriptions(&self) -> Subscriptions<Self::Msg> {
+        Subscriptions::new()
     }
 }
 

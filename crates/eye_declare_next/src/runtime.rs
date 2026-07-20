@@ -163,19 +163,24 @@ where
 }
 
 /// The sync loop can't execute async work — surface the mistake loudly
-/// instead of silently dropping the app's spawned streams.
+/// instead of silently dropping the app's spawned streams/subscriptions.
 fn reject_effects<A: App>(runtime: &mut Runtime<A>) -> io::Result<()>
 where
     A::Msg: Clone,
 {
-    if runtime.take_effects().is_empty() {
-        Ok(())
-    } else {
-        Err(io::Error::other(
+    if !runtime.take_effects().is_empty() {
+        return Err(io::Error::other(
             "app spawned async work (ctx.spawn/perform); drive it with the tokio runtime \
-             (eye_declare_next::tokio_driver::run) instead of the sync run()",
-        ))
+             (eye_declare_next::driver_tokio::run) instead of the sync run()",
+        ));
     }
+    if !runtime.app().subscriptions().is_empty() {
+        return Err(io::Error::other(
+            "app declares subscriptions; drive it with the tokio runtime \
+             (eye_declare_next::driver_tokio::run) instead of the sync run()",
+        ));
+    }
+    Ok(())
 }
 
 /// Restores the terminal on drop, including panic unwind.

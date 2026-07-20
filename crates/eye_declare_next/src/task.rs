@@ -17,6 +17,9 @@ use std::task::{Context, Poll, Waker};
 
 use futures_core::Stream;
 
+/// A boxed message stream, the shape drivers execute.
+pub type MsgStream<Msg> = Pin<Box<dyn Stream<Item = Msg> + Send>>;
+
 /// Handle to spawned work. Dropping it cancels the work; call
 /// [`detach`](Task::detach) for fire-and-forget.
 pub struct Task {
@@ -47,14 +50,14 @@ pub struct Cancel {
 }
 
 impl Cancel {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             cancelled: AtomicBool::new(false),
             waker: Mutex::new(None),
         }
     }
 
-    fn cancel(&self) {
+    pub(crate) fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
         if let Some(waker) = self.waker.lock().unwrap().take() {
             waker.wake();
@@ -102,7 +105,7 @@ pub enum Effect<Msg> {
     /// Run a stream, feeding each item back into `update` as a message,
     /// until it ends or its [`Task`] is dropped.
     Spawn {
-        stream: Pin<Box<dyn Stream<Item = Msg> + Send>>,
+        stream: MsgStream<Msg>,
         cancel: Arc<Cancel>,
     },
 }

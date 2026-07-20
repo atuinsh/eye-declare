@@ -305,13 +305,17 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
 - **O6 — sealing: RESOLVED → `push` suffices.** A sealed turn lands above
   the tail while the input box keeps rendering below; no `push_before`.
 
-Still open:
-
-- **O3 — resize semantics:** committed-is-immutable means still-visible sealed blocks
-  don't re-wrap on width change (v1 re-wraps them). Acceptable? (Matches plain-println
-  behavior; massive simplification.)
-- **O4 — naming:** working names `eye_declare_engine` / `eye_declare_next`; real names
-  (and whether v2 is `eye_declare 1.0` or a rename) decided at the end.
+- **O3 — resize semantics: RESOLVED (2026-07-16) → committed is immutable.**
+  Sealed blocks keep the terminal's own reflow on width change (like any
+  printed output); only the live region erases and repaints
+  (`Engine::reset_region`). App-side recipe for content that should stay
+  resize-responsive: keep it in the tail longer — blocks re-wrap live
+  until pushed.
+- **O4 — naming: RESOLVED (2026-07-16) → v2 ships as `eye_declare 0.<next>.0`**
+  (0.6.0 from today's 0.5.1), replacing the v1 API in the `eye_declare`
+  crate; `1.0.0` once confidence is earned. `eye_declare_next` is a
+  workspace-internal working name that dissolves at release;
+  `eye_declare_engine` publishes alongside.
 - **O7 — RESOLVED → `Element` is `Msg`-free** (built that way in
   `eye_declare_next`; dissolved the `ElementExt<Msg>`/`Fluent` split and
   all `Msg`-inference concerns). Revisit only if mouse support wants
@@ -393,13 +397,47 @@ Still open:
      scroll, or truncating). Feature matrix checked (no-default-features,
      markdown-only). Note: markdown parses in both height() and render()
      — memoization is a later optimization if profiling asks.
-   - Next slices: subscriptions (confirmed consumer: Atuin AI wants
-     state-conditional periodic server checks, e.g. Hub session polling
-     while a session is active) → text-area soft wrap → O3/O4 decisions →
-     atuin-ai port (Phase 5) → OpenRouter flagship example (Phase 6).
+   - Slice 7 ✅ (2026-07-16): subscriptions. Core `Subscriptions<Msg>`
+     (keyed `every` + `stream`, `.when()` free via Fluent, first-fire after
+     one interval); driver-side `ActiveSubscriptions::sync` diffs declared
+     vs running (interval change restarts; streams compared by key only)
+     and returns a `SyncReport` for logging/deterministic tests. Wired into
+     `driver_tokio::run` after every update; drop cancels all. Sync `run()`
+     rejects subscribing apps with an actionable error.
+   - Slice 8 ✅ (2026-07-16): text-area soft wrap. Character wrapping
+     (grapheme + display-width aware; wide graphemes move whole to the
+     next row), on by default with `.wrap(false)` to truncate. One
+     `wrap_line` function is the single source of truth for layout,
+     height, cursor mapping, and the scroll window, so they cannot
+     disagree. Documented edge: cursor at the end of an exactly-full
+     line clamps to the last cell. Word wrap noted as a drop-in
+     replacement of `wrap_line` if ever wanted.
+   - O3 + O4 resolved (see Open questions). **Phase 4 complete.**
+   - Next: atuin-ai port (Phase 5) → OpenRouter flagship example (Phase 6).
+   - Design rule (decided 2026-07-16): `animated()` stays separate from
+     subscriptions even though they share runtime plumbing. Split by who
+     owns the time-varying thing: view-only time dependence (pixels change,
+     model doesn't — spinners) → `animated()`, declared by the widget,
+     leak-proof because it's re-derived from the presented tail; model-
+     evolving time (countdowns, typewriter reveals, polls) → subscription
+     with a Msg through `update`. Animation ticks are not messages.
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
    shadow) delete cleanly and the TUI code shrinks.
+   **Plan written (2026-07-16):** `.planning/PHASE5-ATUIN-PORT.md` — file-by-file
+   mapping, six port slices, expected library additions (startup effects,
+   keyboard enhancement flags, `Keymap::merge`). Work happens on an atuin
+   branch via Cargo package-rename (`eye_declare = { package =
+   "eye_declare_next", .. }`) so code paths never change at release.
+   - Port slice 1 ✅ (2026-07-16, atuin `mkt/ai-eye-declare-v2`): skeleton.
+     Dep swapped (versions unified cleanly: ratatui-core 0.1 / crossterm
+     0.29 both sides); component layer + `driver.rs` deleted; `AiApp` with
+     the FSM as model; all turn/tool views ported to fluent builders
+     (spike Ports 1–2 were near-drop-in); headless VTE render tests.
+     **716+/3104− — the TUI shrank ~2.4k lines in one slice.** Dormant
+     effect layer behind a crate-level `allow(dead_code)` that the
+     deletion-audit slice removes. Confirmed missing upstream: startup
+     effects (initial prompt + usage fetch), keyboard enhancement flags.
 6. **Flagship example** — ship a generic TUI agent interface connected to
    OpenRouter: real streaming/cancellation/input patterns anyone can copy
    without reading the Atuin source. (Also the natural README demo.)

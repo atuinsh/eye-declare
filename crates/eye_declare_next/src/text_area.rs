@@ -16,8 +16,10 @@
 //!
 //! Editing is grapheme-aware (the cursor never lands inside an emoji or
 //! combining sequence) and cursor columns are display-width-aware (CJK,
-//! wide emoji). Long lines are not soft-wrapped yet; they render truncated
-//! at the width (soft wrap is a planned follow-up).
+//! wide emoji). Long lines soft-wrap at the render width by default
+//! (character wrapping, like the terminal's own; disable with
+//! [`wrap(false)`](TextArea::wrap) to truncate instead). Wrap layout and
+//! cursor mapping share one function, so they cannot disagree.
 
 use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect;
@@ -235,6 +237,7 @@ pub struct TextArea<'a> {
     placeholder_style: Style,
     focus: Option<FocusHandle>,
     max_height: u16,
+    wrap: bool,
 }
 
 pub fn text_area(state: &TextAreaState) -> TextArea<'_> {
@@ -245,6 +248,7 @@ pub fn text_area(state: &TextAreaState) -> TextArea<'_> {
         placeholder_style: Style::default(),
         focus: None,
         max_height: u16::MAX,
+        wrap: true,
     }
 }
 
@@ -278,18 +282,76 @@ impl<'a> TextArea<'a> {
         self
     }
 
-    /// First visible line given the rendered height (keeps the cursor row
-    /// in the window, pinned toward the bottom when content overflows).
-    fn first_visible(&self, height: u16) -> usize {
-        self.state
-            .line
-            .saturating_sub(height.saturating_sub(1) as usize)
+    /// Soft-wrap long logical lines at the render width (default: on).
+    /// Disabled, long lines truncate at the width.
+    pub fn wrap(mut self, wrap: bool) -> Self {
+        self.wrap = wrap;
+        self
+    }
+
+    /// The cursor's visual position: `(visual row within all wrapped
+    /// content, display column)`. The single source of truth that
+    /// `render`, `cursor`, and the scroll window all derive from — wrap
+    /// layout and cursor math can't disagree.
+    fn visual_cursor(&self, width: u16) -> (usize, u16) {
+        if !self.wrap {
+            return (
+                self.state.line,
+                self.state.cursor_display_col().min(width.saturating_sub(1)),
+            );
+        }
+
+        let rows_above: usize = self.state.lines[..self.state.line]
+            .iter()
+            .map(|l| wrap_line(l, width).len())
+            .sum();
+
+        let line = &self.state.lines[self.state.line];
+        let segments = wrap_line(line, width);
+        let offset = byte_at(line, self.state.col);
+
+        // The segment containing the cursor: the first whose end is past
+        // the offset. An offset at a full row's boundary belongs to the
+        // next row (where the next grapheme would land) — except at the
+        // very end of the line, where it stays on the last row, clamped.
+        let mut segment = segments.len() - 1;
+        for (i, &(_start, end)) in segments.iter().enumerate() {
+            if offset < end {
+                segment = i;
+                break;
+            }
+        }
+
+        let (start, _end) = segments[segment];
+        let col = (line[start..offset].width() as u16).min(width.saturating_sub(1));
+        (rows_above + segment, col)
+    }
+
+    /// First visible visual row: keeps the cursor row in the window,
+    /// pinned toward the bottom when content overflows.
+    fn window_start(&self, width: u16, height: u16) -> usize {
+        let (cursor_row, _) = self.visual_cursor(width);
+        cursor_row.saturating_sub(height.saturating_sub(1) as usize)
     }
 }
 
 impl Element for TextArea<'_> {
-    fn height(&self, _width: u16) -> u16 {
-        (self.state.line_count() as u16).clamp(1, self.max_height)
+    fn height(&self, width: u16) -> u16 {
+        if width == 0 {
+            return 0;
+        }
+        let rows = if self.wrap {
+            self.state
+                .lines
+                .iter()
+                .map(|l| wrap_line(l, width).len())
+                .sum::<usize>()
+        } else {
+            self.state.line_count()
+        };
+        // min() before the cast: content past 65,535 visual rows must
+        // saturate, not wrap around to a tiny height.
+        (rows.min(u16::MAX as usize) as u16).clamp(1, self.max_height)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -308,18 +370,32 @@ impl Element for TextArea<'_> {
             return;
         }
 
-        let first = self.first_visible(area.height);
-        for (row, line) in self.state.lines.iter().skip(first).enumerate() {
-            if row as u16 >= area.height {
-                break;
+        let first = self.window_start(area.width, area.height);
+        let mut visual_row = 0usize;
+        let mut y = 0u16;
+
+        'lines: for line in &self.state.lines {
+            let segments = if self.wrap {
+                wrap_line(line, area.width)
+            } else {
+                vec![(0, line.len())]
+            };
+            for &(start, end) in &segments {
+                if visual_row >= first {
+                    if y >= area.height {
+                        break 'lines;
+                    }
+                    buf.set_stringn(
+                        area.x,
+                        area.y + y,
+                        &line[start..end],
+                        area.width as usize,
+                        self.style,
+                    );
+                    y += 1;
+                }
+                visual_row += 1;
             }
-            buf.set_stringn(
-                area.x,
-                area.y + row as u16,
-                line,
-                area.width as usize,
-                self.style,
-            );
         }
     }
 
@@ -328,20 +404,50 @@ impl Element for TextArea<'_> {
         if !focused {
             return None;
         }
-        let first = self.first_visible(area.height);
-        let row = (self.state.line - first) as u16;
-        let col = self
-            .state
-            .cursor_display_col()
-            .min(area.width.saturating_sub(1));
-        Some((col, row))
+        let (cursor_row, col) = self.visual_cursor(area.width);
+        let first = self.window_start(area.width, area.height);
+        Some((col, (cursor_row - first) as u16))
     }
+}
+
+/// Split one logical line into visual rows at `width`: `(byte_start,
+/// byte_end)` per row. Character wrapping (like the terminal's own), never
+/// inside a grapheme, display-width aware — a wide grapheme that doesn't
+/// fit moves whole to the next row. An empty line is one empty row.
+///
+/// (Word wrap would be a drop-in replacement here if wanted later; keeping
+/// the layout function tiny and cursor-exact won out for now.)
+fn wrap_line(line: &str, width: u16) -> Vec<(usize, usize)> {
+    if width == 0 {
+        return vec![(0, line.len())];
+    }
+
+    let mut segments = Vec::new();
+    let mut start = 0usize;
+    let mut used = 0u16;
+
+    for (idx, grapheme) in line.grapheme_indices(true) {
+        let gw = grapheme.width() as u16;
+        // `used > 0` keeps a grapheme wider than the whole width on a row
+        // of its own rather than looping forever.
+        if used + gw > width && used > 0 {
+            segments.push((start, idx));
+            start = idx;
+            used = 0;
+        }
+        used += gw;
+    }
+
+    segments.push((start, line.len()));
+    segments
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use crate::focus::Focus;
 
     fn press(state: &mut TextAreaState, code: KeyCode) {
         state.handle(&InputEvent::Key(KeyEvent::new(code, KeyModifiers::NONE)));
@@ -476,6 +582,125 @@ mod tests {
             text_area(&s).track_focus(&handle).cursor(area),
             Some((2, 0))
         );
+    }
+
+    // ── Soft wrap ──────────────────────────────────────────────────
+
+    fn rendered(el: &TextArea<'_>, width: u16) -> Vec<String> {
+        let height = Element::height(el, width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        el.render(area, &mut buf);
+        (0..height)
+            .map(|y| {
+                let mut line: String = (0..width).map(|x| buf[(x, y)].symbol()).collect();
+                while line.ends_with(' ') {
+                    line.pop();
+                }
+                line
+            })
+            .collect()
+    }
+
+    #[test]
+    fn wrap_line_splits_at_width() {
+        assert_eq!(wrap_line("abcdef", 4), vec![(0, 4), (4, 6)]);
+        assert_eq!(wrap_line("", 4), vec![(0, 0)]);
+        assert_eq!(wrap_line("ab", 4), vec![(0, 2)]);
+    }
+
+    #[test]
+    fn wrap_line_respects_wide_graphemes() {
+        // Each CJK char is display width 2: "日本語" at width 4 → "日本" | "語".
+        let s = "日本語";
+        let segs = wrap_line(s, 4);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(&s[segs[0].0..segs[0].1], "日本");
+        assert_eq!(&s[segs[1].0..segs[1].1], "語");
+
+        // Width 3 can't fit two wide chars per row: one per row.
+        assert_eq!(wrap_line(s, 3).len(), 3);
+    }
+
+    #[test]
+    fn long_line_wraps_in_render_and_height() {
+        let mut s = TextAreaState::new();
+        s.insert_str("abcdefgh");
+        let ta = text_area(&s);
+        assert_eq!(Element::height(&ta, 4), 2);
+        assert_eq!(rendered(&ta, 4), vec!["abcd", "efgh"]);
+    }
+
+    #[test]
+    fn cursor_maps_into_wrapped_rows() {
+        let mut s = TextAreaState::new();
+        s.insert_str("abcdefgh");
+        // Move cursor to after "abcde" (col 5) → visual row 1, col 1.
+        press(&mut s, KeyCode::Home);
+        for _ in 0..5 {
+            press(&mut s, KeyCode::Right);
+        }
+
+        let focus = Focus::new();
+        let handle = focus.handle();
+        handle.focus();
+        let ta = text_area(&s).track_focus(&handle);
+        let area = Rect::new(0, 0, 4, Element::height(&ta, 4));
+        assert_eq!(ta.cursor(area), Some((1, 1)));
+    }
+
+    #[test]
+    fn cursor_at_exact_row_boundary_lands_on_next_row() {
+        let mut s = TextAreaState::new();
+        s.insert_str("abcdefgh");
+        press(&mut s, KeyCode::Home);
+        for _ in 0..4 {
+            press(&mut s, KeyCode::Right);
+        }
+        // Offset 4 is the boundary between full row 0 and row 1: the next
+        // grapheme would land at row 1 col 0, so that's where the cursor is.
+        let focus = Focus::new();
+        let handle = focus.handle();
+        handle.focus();
+        let ta = text_area(&s).track_focus(&handle);
+        let area = Rect::new(0, 0, 4, Element::height(&ta, 4));
+        assert_eq!(ta.cursor(area), Some((0, 1)));
+    }
+
+    #[test]
+    fn cursor_at_end_of_exactly_full_line_clamps() {
+        let mut s = TextAreaState::new();
+        s.insert_str("abcd");
+        // End of a line that exactly fills its row: no next row exists, so
+        // the cursor clamps to the last cell (documented edge).
+        let focus = Focus::new();
+        let handle = focus.handle();
+        handle.focus();
+        let ta = text_area(&s).track_focus(&handle);
+        let area = Rect::new(0, 0, 4, 1);
+        assert_eq!(ta.cursor(area), Some((3, 0)));
+    }
+
+    #[test]
+    fn window_follows_visual_cursor_through_wrapped_content() {
+        let mut s = TextAreaState::new();
+        // One long line -> 4 visual rows at width 4, plus a second line.
+        s.insert_str("aaaabbbbccccdddd\nend");
+        // Cursor is at the end of "end": visual row 4 (rows 0-3 are the
+        // wrapped first line... row 4 would be "dddd"'s boundary; "end" is
+        // row 4). With max_height 2 the window shows the last two rows.
+        let ta = text_area(&s).max_height(2);
+        assert_eq!(Element::height(&ta, 4), 2);
+        assert_eq!(rendered(&ta, 4), vec!["dddd", "end"]);
+    }
+
+    #[test]
+    fn no_wrap_mode_truncates() {
+        let mut s = TextAreaState::new();
+        s.insert_str("abcdefgh");
+        let ta = text_area(&s).wrap(false);
+        assert_eq!(Element::height(&ta, 4), 1);
+        assert_eq!(rendered(&ta, 4), vec!["abcd"]);
     }
 }
 #[cfg(test)]
