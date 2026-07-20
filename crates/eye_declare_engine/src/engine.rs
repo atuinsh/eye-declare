@@ -84,10 +84,10 @@ impl Engine {
             let empty = Frame::new(ratatui_core::buffer::Buffer::empty(
                 ratatui_core::layout::Rect::new(0, 0, self.width, 0),
             ));
-            let mut diff = new_frame.diff(&empty);
+            let stream_until = new_height.saturating_sub(self.terminal_height);
+            let mut diff = new_frame.diff_from(&empty, stream_until);
 
             let mut output = Vec::new();
-            let stream_until = new_height.saturating_sub(self.terminal_height);
             self.stream_rows_into_scrollback(&new_frame, 0, stream_until, &mut output);
 
             // Emit newlines to claim rows (minus 1 because the cursor
@@ -121,9 +121,12 @@ impl Engine {
             return output;
         }
 
-        // Subsequent renders
+        // Subsequent renders. Rows already past the scrollback boundary
+        // are immutable; skip them at diff time instead of filtering
+        // afterward.
         let prev = self.prev_frame.as_ref().unwrap();
-        let mut diff = new_frame.diff(prev);
+        let already_scrolled = self.emitted_rows.saturating_sub(self.terminal_height);
+        let mut diff = new_frame.diff_from(prev, already_scrolled);
 
         if diff.is_empty() && !diff.grew() {
             // Even if content didn't change, cursor position might have

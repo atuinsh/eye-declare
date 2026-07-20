@@ -27,6 +27,11 @@ markdown = ["dep:pulldown-cmark"]
 tokio = ["dep:tokio", "crossterm/event-stream"]
 
 [dev-dependencies]
+criterion = "0.5"
 eye_declare_engine = { path = "../eye_declare_engine", features = ["test-util"] }
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+
+[[bench]]
+name = "frame"
+harness = false

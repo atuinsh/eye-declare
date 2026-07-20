@@ -45,11 +45,22 @@ impl Frame {
     /// the shorter one is logically padded with empty cells so that
     /// `Buffer::diff` can operate on matching dimensions.
     pub fn diff(&self, previous: &Frame) -> Diff {
+        self.diff_from(previous, 0)
+    }
+
+    /// [`diff`](Frame::diff), skipping rows above `start_row`.
+    ///
+    /// Rows that have scrolled into terminal scrollback can never be
+    /// repainted, so comparing them is pure waste — the engine passes its
+    /// scrollback boundary here. With a tail much taller than the
+    /// terminal, this is the difference between diffing the whole virtual
+    /// frame and diffing one screenful.
+    pub fn diff_from(&self, previous: &Frame, start_row: u16) -> Diff {
         let new_area = self.buffer.area;
         let prev_area = previous.buffer.area;
 
         // Fast path: same dimensions, use Buffer::diff directly
-        if new_area == prev_area {
+        if new_area == prev_area && start_row == 0 {
             let changes = previous
                 .buffer
                 .diff(&self.buffer)
@@ -71,7 +82,7 @@ impl Frame {
         let default_cell = Cell::default();
         let mut changes = Vec::new();
 
-        for y in 0..max_height {
+        for y in start_row..max_height {
             for x in 0..max_width {
                 let in_prev = x < prev_area.width && y < prev_area.height;
                 let in_new = x < new_area.width && y < new_area.height;

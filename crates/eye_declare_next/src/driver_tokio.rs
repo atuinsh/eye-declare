@@ -86,7 +86,18 @@ where
                 }
             }
 
-            Some(msg) = rx.recv() => runtime.process(msg),
+            Some(msg) = rx.recv() => {
+                // Drain whatever else is already queued (a stream burst)
+                // into one batch: many chunks, one frame.
+                let mut batch = vec![msg];
+                while batch.len() < 256 {
+                    match rx.try_recv() {
+                        Ok(m) => batch.push(m),
+                        Err(_) => break,
+                    }
+                }
+                runtime.process_batch(batch)
+            }
 
             _ = sleep_opt(anim), if anim.is_some() => (runtime.present(), None),
         };

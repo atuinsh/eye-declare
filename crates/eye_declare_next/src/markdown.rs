@@ -7,6 +7,8 @@
 //! code, fenced code blocks, and (one level of) lists; word-wraps at the
 //! render width with honest height measurement.
 
+use std::cell::RefCell;
+
 use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect;
 use ratatui_core::style::{Color, Modifier, Style};
@@ -44,19 +46,38 @@ impl Default for MarkdownStyles {
 pub struct Markdown {
     source: String,
     styles: MarkdownStyles,
+    /// Parsed text, shared between `height` and `render` within the
+    /// element's lifetime (one frame). Elements are rebuilt per frame, so
+    /// this halves the per-frame parse cost without any cross-frame
+    /// invalidation story.
+    parsed: RefCell<Option<RText<'static>>>,
+    /// Wrapped row count per width, same lifetime story. `height` runs at
+    /// least twice a frame (the tail measure, then container placement
+    /// during render), and wrap-counting a long document isn't free.
+    measured: RefCell<Option<(u16, u16)>>,
 }
 
 pub fn markdown(source: impl Into<String>) -> Markdown {
     Markdown {
         source: source.into(),
         styles: MarkdownStyles::default(),
+        parsed: RefCell::new(None),
+        measured: RefCell::new(None),
     }
 }
 
 impl Markdown {
     pub fn styles(mut self, styles: MarkdownStyles) -> Self {
         self.styles = styles;
+        self.parsed.take();
+        self.measured.take();
         self
+    }
+
+    fn with_parsed<R>(&self, f: impl FnOnce(&RText<'static>) -> R) -> R {
+        let mut cache = self.parsed.borrow_mut();
+        let parsed = cache.get_or_insert_with(|| parse(&self.source, &self.styles));
+        f(parsed)
     }
 }
 
@@ -65,15 +86,40 @@ impl Element for Markdown {
         if self.source.is_empty() || width == 0 {
             return 0;
         }
-        eye_declare_engine::wrap::wrapped_line_count(&parse(&self.source, &self.styles), width)
+        if let Some((w, rows)) = *self.measured.borrow()
+            && w == width
+        {
+            return rows;
+        }
+        let rows =
+            self.with_parsed(|text| eye_declare_engine::wrap::wrapped_line_count(text, width));
+        *self.measured.borrow_mut() = Some((width, rows));
+        rows
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if self.source.is_empty() || area.width == 0 || area.height == 0 {
             return;
         }
-        eye_declare_engine::wrap::wrapping_paragraph(parse(&self.source, &self.styles))
-            .render(area, buf);
+        self.with_parsed(|text| {
+            // A borrowed view of the cached parse: per-line Vecs, but no
+            // string copies (a deep clone would re-allocate every span).
+            let borrowed = RText::from(
+                text.lines
+                    .iter()
+                    .map(|line| {
+                        Line::from(
+                            line.spans
+                                .iter()
+                                .map(|s| Span::styled(s.content.as_ref(), s.style))
+                                .collect::<Vec<_>>(),
+                        )
+                        .style(line.style)
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            eye_declare_engine::wrap::wrapping_paragraph(borrowed).render(area, buf)
+        });
     }
 }
 
