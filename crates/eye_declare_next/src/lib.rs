@@ -45,7 +45,7 @@ pub use input::{InputEvent, Key, Keymap, key, keymap};
 #[cfg(feature = "markdown")]
 pub use markdown::{Markdown, MarkdownStyles, markdown};
 pub use panel::{Panel, panel};
-pub use runtime::{Runtime, run};
+pub use runtime::{KeyboardProtocol, RunOptions, Runtime, run, run_with};
 pub use spinner::{Spinner, spinner};
 pub use stack::{Col, Row, Width, col, row};
 pub use subscription::Subscriptions;

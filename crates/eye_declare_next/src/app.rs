@@ -18,6 +18,16 @@ pub trait App: Sized {
     /// What the run loop returns after [`Ctx::exit`].
     type Output: Default;
 
+    /// One-time startup effects, run during runtime construction before
+    /// the first frame: push preamble blocks, spawn initial work, feed an
+    /// initial message through the model. Default: nothing.
+    ///
+    /// Async effects spawned here need an async driver, exactly as from
+    /// `update`; the sync [`run`](crate::run) rejects them.
+    fn init(&mut self, ctx: &mut Ctx<'_, Self>) {
+        let _ = ctx;
+    }
+
     /// Handle a message: mutate the model, emit effects via `ctx`.
     fn update(&mut self, msg: Self::Msg, ctx: &mut Ctx<'_, Self>);
 

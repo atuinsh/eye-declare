@@ -424,11 +424,56 @@ Resolved by the bake-off (evidence: `crates/spike/FINDINGS.md`):
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
    shadow) delete cleanly and the TUI code shrinks.
+   ✅ **COMPLETE (2026-07-20).** All four adapters gone with no successors;
+   production TUI code −17% (~780 lines) while gaining a 69-test headless
+   suite. Full verdict + patterns for the docs: `.planning/PHASE5-ATUIN-PORT.md`.
+   **← Phase 6 next: the OpenRouter flagship example.**
    **Plan written (2026-07-16):** `.planning/PHASE5-ATUIN-PORT.md` — file-by-file
    mapping, six port slices, expected library additions (startup effects,
    keyboard enhancement flags, `Keymap::merge`). Work happens on an atuin
    branch via Cargo package-rename (`eye_declare = { package =
    "eye_declare_next", .. }`) so code paths never change at release.
+   - Port slice 5 ✅ (2026-07-20): pickers + usage + startup. Library
+     addition `App::init` (runs in `Runtime::new`; pushed bytes precede
+     the first frame via a pending buffer drained by present/process;
+     `Runtime::startup()` delivers init bytes + init exit to drivers).
+     Atuin: initial prompt submits through normal dispatch, stale usage
+     refreshes in the background, /model picker reuses `SelectState`,
+     status bar ported. Design win: the keymap's Esc mode-ladder deleted —
+     `Msg::Cancel` always; the FSM was already the owner of what
+     cancelling means per state. Remaining: slice 6 deletion audit.
+   - Port slice 4 ✅ (2026-07-20): tools + permissions. Shell execution =
+     detached message stream (previews + outcome from one select loop;
+     interrupt ≠ cancel proven by an interrupted-sleep test); file tools
+     inline with snapshot/tracker/diff wiring; permission fast paths sync,
+     resolver via perform, headless resolves Ask (which is the prompt
+     path tests need). First real sub-model: `SelectState` +
+     `Keymap::merge` (added to the library on the port-additions layer,
+     with the earlier-declarations-win contract). Debug lesson repeated:
+     probe, don't guess — "prompt never appears" was capability gating +
+     a wrong field name (`path` vs `file_path`), both found by printing
+     FSM state. Also rebased onto upstream (DisplayRichExt/typed URLs).
+   - Port slice 3 ✅ (2026-07-16): streaming. Bridge = plain
+     `Stream<Item = Msg>` via `ctx.spawn`; cancel-on-drop deleted the
+     watch-channel protocol *and* the stale-cache-population hazard.
+     Persistence = actor owning `SessionManager` (`&mut self` methods +
+     write ordering → single owning task, no locks — better answer than
+     the plan's Arc guess). Streaming text injects into the tail's
+     TurnBuilder; agent turns seal on Idle, stay live through Error
+     (Retry continues the turn); timeouts = detached `ctx.perform`
+     sleeps. Test seam: `AiApp::headless` (io: Option) — stream flows
+     driven as `Msg::Fsm` events. Tools/permissions next (slice 4).
+   - Port slice 2 ✅ (2026-07-16): input path. tui-textarea kept as the
+     editor — a plain model value + ~50-line Element adapter (RefCell only
+     for measure()'s memoization `&mut`); the ratatui-interop design rule
+     validated in production shape. Keymap policy table fully declarative
+     (Esc/Ctrl+C/Enter/Tab resolve their mode at keymap build); Tab
+     footgun structurally gone (test: `typing_disarms_command_execution`).
+     Submit → FSM; ExitApp executes (suggest→Execute/Insert works e2e);
+     sealed turns `ctx.push` at submit. Library addition shipped on stack
+     layer `mkt/v2-7-port-additions`: `KeyboardProtocol`/`RunOptions` +
+     `run_with` (Shift+Enter). Test lesson: headless harness must feed
+     `handle()`'s bytes to the VTE terminal, not just `present()`'s.
    - Port slice 1 ✅ (2026-07-16, atuin `mkt/ai-eye-declare-v2`): skeleton.
      Dep swapped (versions unified cleanly: ratatui-core 0.1 / crossterm
      0.29 both sides); component layer + `driver.rs` deleted; `AiApp` with
