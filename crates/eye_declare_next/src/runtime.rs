@@ -21,19 +21,47 @@ pub struct Runtime<A: App> {
     timeline: Timeline,
     animate: Option<Duration>,
     effects: Vec<Effect<A::Msg>>,
+    /// Bytes produced by [`App::init`] pushes, drained by the next
+    /// [`present`](Runtime::present).
+    pending: Vec<u8>,
+    /// An exit requested from [`App::init`], delivered via
+    /// [`startup`](Runtime::startup).
+    init_exit: Option<A::Output>,
 }
 
 impl<A: App> Runtime<A>
 where
     A::Msg: Clone,
 {
-    pub fn new(app: A, width: u16, terminal_height: u16) -> Self {
+    /// Construct the runtime. Runs [`App::init`]; its pushed blocks join
+    /// the next `present`'s bytes and its spawned effects wait in
+    /// [`take_effects`](Runtime::take_effects).
+    pub fn new(mut app: A, width: u16, terminal_height: u16) -> Self {
+        let mut timeline = Timeline::new(width, terminal_height);
+        let mut pending = Vec::new();
+        let mut effects = Vec::new();
+        let mut ctx = Ctx {
+            timeline: &mut timeline,
+            output: &mut pending,
+            effects: &mut effects,
+            exit: None,
+        };
+        app.init(&mut ctx);
+        let init_exit = ctx.exit;
         Self {
             app,
-            timeline: Timeline::new(width, terminal_height),
+            timeline,
             animate: None,
-            effects: Vec::new(),
+            effects,
+            pending,
+            init_exit,
         }
+    }
+
+    /// First bytes to write and any exit [`App::init`] requested — what a
+    /// driver calls once before its loop, instead of a bare `present`.
+    pub fn startup(&mut self) -> (Vec<u8>, Option<A::Output>) {
+        (self.present(), self.init_exit.take())
     }
 
     /// Feed one input event. Resolves it through the app's keymap; if a
@@ -49,7 +77,9 @@ where
     /// Feed one message (from the keymap, or — in the async driver — from
     /// tasks and subscriptions).
     pub fn process(&mut self, msg: A::Msg) -> (Vec<u8>, Option<A::Output>) {
-        let mut bytes = Vec::new();
+        // Undelivered init bytes come first so init's blocks precede this
+        // update's pushes in scrollback.
+        let mut bytes = std::mem::take(&mut self.pending);
         let mut ctx = Ctx {
             timeline: &mut self.timeline,
             output: &mut bytes,
@@ -77,7 +107,9 @@ where
     pub fn present(&mut self) -> Vec<u8> {
         let tail = self.app.tail();
         self.animate = tail.animated();
-        self.timeline.present(&tail)
+        let mut bytes = std::mem::take(&mut self.pending);
+        bytes.extend(self.timeline.present(&tail));
+        bytes
     }
 
     /// How soon the tail wants re-presenting for animation, if at all.
@@ -156,9 +188,13 @@ where
 
     let _guard = RawModeGuard::enable(options.keyboard)?;
 
-    let bytes = runtime.present();
+    let (bytes, init_exit) = runtime.startup();
     stdout.write_all(&bytes)?;
     stdout.flush()?;
+    if let Some(output) = init_exit {
+        return Ok(output);
+    }
+    reject_effects(&mut runtime)?;
 
     loop {
         let timeout = runtime

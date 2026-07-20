@@ -230,3 +230,84 @@ fn borrowed_blocks_push_cleanly() {
     assert_eq!(term.viewport_lines()[0], "  one");
     assert_eq!(term.viewport_lines()[1], "  two");
 }
+
+#[test]
+fn init_pushes_precede_first_frame_and_later_pushes() {
+    struct Banner {
+        submitted: bool,
+    }
+
+    impl App for Banner {
+        type Msg = ();
+        type Output = ();
+
+        fn init(&mut self, ctx: &mut Ctx<'_, Self>) {
+            ctx.push(text("welcome banner"));
+        }
+
+        fn update(&mut self, _msg: (), ctx: &mut Ctx<'_, Self>) {
+            self.submitted = true;
+            ctx.push(text("first message"));
+        }
+
+        fn tail(&self) -> impl Element + '_ {
+            text(if self.submitted { "done" } else { "prompt" })
+        }
+    }
+
+    // The driver path: startup() delivers init's block before the tail.
+    let mut rt = Runtime::new(Banner { submitted: false }, 40, 10);
+    let mut term = TestTerminal::new(40, 10);
+    let (bytes, exit) = rt.startup();
+    assert!(exit.is_none());
+    term.feed(&bytes);
+    let screen = term.viewport_lines().join("\n");
+    let banner_row = screen.find("welcome banner").expect("banner missing");
+    let prompt_row = screen.find("prompt").expect("tail missing");
+    assert!(banner_row < prompt_row, "init block must precede the tail");
+
+    // A later push lands below the banner.
+    let (bytes, _) = rt.process(());
+    term.feed(&bytes);
+    let all = [term.scrollback_lines(), term.viewport_lines()]
+        .concat()
+        .join("\n");
+    let banner = all.find("welcome banner").unwrap();
+    let first = all.find("first message").unwrap();
+    assert!(
+        banner < first,
+        "init block stays above later pushes:\n{all}"
+    );
+}
+
+#[test]
+fn init_bytes_survive_process_without_present() {
+    struct P;
+    impl App for P {
+        type Msg = ();
+        type Output = ();
+        fn init(&mut self, ctx: &mut Ctx<'_, Self>) {
+            ctx.push(text("from init"));
+        }
+        fn update(&mut self, _msg: (), ctx: &mut Ctx<'_, Self>) {
+            ctx.push(text("from update"));
+        }
+        fn tail(&self) -> impl Element + '_ {
+            text("tail")
+        }
+    }
+
+    // Skipping startup() and going straight to process(): init's block
+    // must still come out first.
+    let mut rt = Runtime::new(P, 40, 10);
+    let mut term = TestTerminal::new(40, 10);
+    let (bytes, _) = rt.process(());
+    term.feed(&bytes);
+    let all = [term.scrollback_lines(), term.viewport_lines()]
+        .concat()
+        .join("\n");
+    assert!(
+        all.find("from init").unwrap() < all.find("from update").unwrap(),
+        "wrong order:\n{all}"
+    );
+}

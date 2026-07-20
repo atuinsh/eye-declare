@@ -50,9 +50,13 @@ where
 
     let _guard = RawModeGuard::enable(options.keyboard)?;
 
-    let bytes = runtime.present();
+    let (bytes, init_exit) = runtime.startup();
     stdout.write_all(&bytes)?;
     stdout.flush()?;
+    if let Some(output) = init_exit {
+        return Ok(output);
+    }
+    spawn_effects(runtime.take_effects(), &tx);
 
     let mut subs = ActiveSubscriptions::new(tx.clone());
     subs.sync(runtime.app().subscriptions());
