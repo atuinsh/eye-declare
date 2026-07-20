@@ -378,13 +378,38 @@ Still open:
      them). `examples/stream.rs` is the mini-agent demo: streaming turn in
      the tail, sealed to scrollback on completion, Esc-cancels via Task
      drop.
-   - Next slices: widgets (`TextAreaState`, feature-flagged markdown,
-     viewport, borders/`View`-equivalent chrome) → subscriptions →
-     O3/O4 decisions → atuin-ai port (Phase 5).
+   - Slice 5 ✅ (2026-07-15): widgets + composition. `TextAreaState` (the
+     strict-Elm input: grapheme-aware editing, display-width cursor,
+     policy keys excluded by design) + borrowing `text_area()` view with
+     placeholder/max-height/focus-tracked cursor; `Panel` border/title/
+     footer chrome with cursor offsetting. `tests/composition.rs` is the
+     Port 3A pattern made real: a reusable PromptBox sub-model (own Msg/
+     update/keymap/view) embedded by enum wrapping + `Keymap::map`, parent
+     claims Submit. `examples/stream.rs` upgraded to the production input
+     shape. Known gap: no soft wrap in the text area yet.
+   - Slice 6 ✅ (2026-07-16): markdown + viewport. `markdown()` adapts
+     atuin-ai's pulldown-cmark renderer (feature `markdown`, default-on);
+     `viewport()` is the fixed-height tail window (wrap via Paragraph
+     scroll, or truncating). Feature matrix checked (no-default-features,
+     markdown-only). Note: markdown parses in both height() and render()
+     — memoization is a later optimization if profiling asks.
+   - Next slices: subscriptions (confirmed consumer: Atuin AI wants
+     state-conditional periodic server checks, e.g. Hub session polling
+     while a session is active) → text-area soft wrap → O3/O4 decisions →
+     atuin-ai port (Phase 5) → OpenRouter flagship example (Phase 6).
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
    shadow) delete cleanly and the TUI code shrinks.
-6. **Ship** — naming, docs, migration story for v1 users, decide v1's fate.
+6. **Flagship example** — ship a generic TUI agent interface connected to
+   OpenRouter: real streaming/cancellation/input patterns anyone can copy
+   without reading the Atuin source. (Also the natural README demo.)
+7. **Ship** — naming, docs, migration story for v1 users, decide v1's fate.
+
+Docs backlog (for the ship phase): the component *convention* (state struct
++ optional Msg/update + optional keymap + view fn — functions, not a
+framework interface), including the history: Elm's components-are-a-trap
+guidance post-0.17 and iced's deprecated Component trait; when to reach for
+`Keymap::map`/enum embedding; parent-claims-policy composition.
 
 ## Non-goals
 
