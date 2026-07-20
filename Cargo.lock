@@ -449,7 +449,7 @@ dependencies = [
 
 [[package]]
 name = "eye_declare_engine"
-version = "0.1.0"
+version = "0.6.0"
 dependencies = [
  "ratatui-core",
  "ratatui-widgets",
@@ -1581,15 +1581,6 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "spike"
-version = "0.0.0"
-dependencies = [
- "crossterm",
- "futures",
- "ratatui-core",
 ]
 
 [[package]]

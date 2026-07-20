@@ -10,7 +10,7 @@ categories = ["command-line-interface"]
 
 [dependencies]
 crossterm = "0.29"
-eye_declare_engine = { version = "0.1.0", path = "../eye_declare_engine" }
+eye_declare_engine = { version = "0.6.0", path = "../eye_declare_engine" }
 futures-core = "0.3"
 pulldown-cmark = { version = "0.13", default-features = false, optional = true }
 ratatui-core = "0.1"
