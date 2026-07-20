@@ -1,8 +1,8 @@
 //! Behavioral tests for the sync Timeline runtime: a conversation-shaped
 //! push/present flow observed through the VTE test terminal.
 
+use eye_declare::{Element, Timeline, col, spinner, text};
 use eye_declare_engine::test_terminal::TestTerminal;
-use eye_declare_next::{Element, Timeline, col, spinner, text};
 use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect;
 
@@ -103,7 +103,7 @@ fn empty_tail_and_finalize_hand_back_to_shell() {
     term.feed(&tl.push(text("done: ok")));
     term.feed(&tl.present(&text("> ")));
     // Exit: clear the tail, reclaim its rows.
-    term.feed(&tl.present(&eye_declare_next::empty()));
+    term.feed(&tl.present(&eye_declare::empty()));
     term.feed(&tl.finalize());
 
     assert_eq!(term.viewport_lines()[0], "done: ok");

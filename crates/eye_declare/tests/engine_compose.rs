@@ -3,10 +3,10 @@
 //! exercises the timeline shape (present a tail, commit rows above it)
 //! ahead of the runtime existing.
 
+use eye_declare::{Element, Fluent, col, text};
 use eye_declare_engine::Engine;
 use eye_declare_engine::frame::Frame;
 use eye_declare_engine::test_terminal::TestTerminal;
-use eye_declare_next::{Element, Fluent, col, text};
 use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect;
 

@@ -28,7 +28,7 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::KeyCode;
-use eye_declare_next::{
+use eye_declare::{
     App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, KeyboardProtocol,
     Keymap, RunOptions, Task, TextAreaState, col, key, keymap, markdown, panel, spinner, text,
     text_area,
@@ -424,6 +424,6 @@ async fn main() -> std::io::Result<()> {
     let model = std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "openrouter/auto".to_string());
 
     let options = RunOptions::default().keyboard(KeyboardProtocol::Enhanced);
-    eye_declare_next::driver_tokio::run_with(Chat::new(api_key, model), options).await?;
+    eye_declare::driver_tokio::run_with(Chat::new(api_key, model), options).await?;
     Ok(())
 }

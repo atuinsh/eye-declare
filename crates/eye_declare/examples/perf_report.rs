@@ -1,6 +1,6 @@
 //! Deterministic allocation + byte-output report for the frame pipeline.
 //!
-//! Run with `cargo run --release -p eye_declare_next --example perf_report`.
+//! Run with `cargo run --release -p eye_declare --example perf_report`.
 //! Counts every heap allocation through a wrapping global allocator, so
 //! the numbers are exact and reproducible — the arena-allocator question
 //! gets answered with data, not vibes.
@@ -12,7 +12,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use eye_declare_next::Runtime;
+use eye_declare::Runtime;
 use scenario::{ChatApp, HEIGHT, Msg, WIDTH};
 
 struct Counting;
@@ -87,7 +87,7 @@ fn main() {
             crossterm::event::KeyModifiers::NONE,
         );
         measure("typing_keystroke (10KB on screen)", 200, || {
-            rt.process(Msg::Input(eye_declare_next::InputEvent::Key(key)))
+            rt.process(Msg::Input(eye_declare::InputEvent::Key(key)))
         });
     }
 
@@ -105,7 +105,7 @@ fn main() {
 
     // Stage isolation at 10KB: where does the frame go?
     {
-        use eye_declare_next::{App, Element};
+        use eye_declare::{App, Element};
         let app = ChatApp::mid_stream(10_000);
         measure("stage: tree build only", 200, || {
             std::hint::black_box(app.tail()).animated()
@@ -121,7 +121,7 @@ fn main() {
         });
         let src = scenario::markdown_response(10_000);
         measure("stage: markdown height (1 parse)", 200, || {
-            eye_declare_next::markdown(src.clone()).height(WIDTH)
+            eye_declare::markdown(src.clone()).height(WIDTH)
         });
     }
 

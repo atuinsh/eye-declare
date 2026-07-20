@@ -3,7 +3,7 @@
 //! headlessly. Shared by the criterion bench and the alloc-report example
 //! via `#[path]` include.
 
-use eye_declare_next::{
+use eye_declare::{
     App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, TextAreaState,
     col, key, keymap, markdown, panel, text, text_area,
 };

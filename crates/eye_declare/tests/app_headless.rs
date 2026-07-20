@@ -3,11 +3,11 @@
 //! users get — the framework tests itself the same way.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use eye_declare_engine::test_terminal::TestTerminal;
-use eye_declare_next::{
+use eye_declare::{
     App, Ctx, Element, ElementExt, Fluent, Focus, FocusHandle, InputEvent, Keymap, Runtime, col,
     key, keymap, text,
 };
+use eye_declare_engine::test_terminal::TestTerminal;
 
 #[derive(Clone)]
 enum Msg {

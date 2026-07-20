@@ -5,11 +5,11 @@
 //! No context system, no event phases, no OutMsg machinery.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use eye_declare_engine::test_terminal::TestTerminal;
-use eye_declare_next::{
+use eye_declare::{
     App, Ctx, Element, Focus, FocusHandle, InputEvent, Keymap, Runtime, TextAreaState, col, key,
     keymap, panel, text, text_area,
 };
+use eye_declare_engine::test_terminal::TestTerminal;
 
 // ───────────────────────────────────────────────────────────────────
 // The reusable component: state + messages + keymap + view
