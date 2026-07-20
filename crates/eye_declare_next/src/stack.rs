@@ -85,14 +85,24 @@ impl Element for Col<'_> {
 
     fn cursor(&self, area: Rect) -> Option<(u16, u16)> {
         // First child that wants the cursor wins; offset by its position.
+        // Mirrors render's clipping: a child (or cursor row) below the
+        // given height must not place the hardware cursor on a row that
+        // was never painted.
         let mut y_offset: u16 = 0;
         for (i, child) in self.children.iter().enumerate() {
             if i > 0 {
                 y_offset = y_offset.saturating_add(self.gap);
             }
-            let h = child.height(area.width);
+            if y_offset >= area.height {
+                break;
+            }
+            let h = child
+                .height(area.width)
+                .min(area.height.saturating_sub(y_offset));
             let child_area = Rect::new(area.x, area.y.saturating_add(y_offset), area.width, h);
-            if let Some((col, row)) = child.cursor(child_area) {
+            if let Some((col, row)) = child.cursor(child_area)
+                && row < h
+            {
                 return Some((col, row.saturating_add(y_offset)));
             }
             y_offset = y_offset.saturating_add(h);
@@ -296,5 +306,29 @@ mod tests {
         let el = col().child(text("above")).child(CursorAt(3, 0).pad_left(2));
         let area = Rect::new(0, 0, 10, 2);
         assert_eq!(el.cursor(area), Some((5, 1)));
+    }
+
+    #[test]
+    fn cursor_of_clipped_child_is_suppressed() {
+        struct CursorAt(u16, u16);
+        impl Element for CursorAt {
+            fn height(&self, _w: u16) -> u16 {
+                1
+            }
+            fn render(&self, _a: Rect, _b: &mut Buffer) {}
+            fn cursor(&self, _a: Rect) -> Option<(u16, u16)> {
+                Some((self.0, self.1))
+            }
+        }
+
+        // The cursor-bearing child sits on row 2, but only 2 rows are
+        // rendered — the hardware cursor must not land on a hidden row.
+        let el = col()
+            .child(text("a"))
+            .child(text("b"))
+            .child(CursorAt(0, 0));
+        assert_eq!(el.cursor(Rect::new(0, 0, 10, 2)), None);
+        // With enough height it comes back.
+        assert_eq!(el.cursor(Rect::new(0, 0, 10, 3)), Some((0, 2)));
     }
 }
