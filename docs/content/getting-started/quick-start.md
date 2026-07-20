@@ -22,7 +22,7 @@ enum Msg {
     Backspace,
     Submit,
     Quit,
-    /// Fallthrough must produce a message; this one means "not for us".
+    // Fallthrough must produce a message; this one means "not for us".
     Noop,
 }
 
@@ -34,7 +34,7 @@ struct Echo {
 
 impl App for Echo {
     type Msg = Msg;
-    /// What `run` returns when the app exits.
+    // What `run` returns when the app exits.
     type Output = usize;
 
     fn update(&mut self, msg: Msg, ctx: &mut Ctx<'_, Self>) {
@@ -61,7 +61,7 @@ impl App for Echo {
         }
     }
 
-    /// The live region: a pure view of the model, rebuilt every frame.
+    // The live region: a pure view of the model, rebuilt every frame.
     fn tail(&self) -> impl Element + '_ {
         col().child(
             text("> ")
@@ -70,7 +70,7 @@ impl App for Echo {
         )
     }
 
-    /// Keys are data, rebuilt from the model each update.
+    // Keys are data, rebuilt from the model each update.
     fn keymap(&self) -> Keymap<Msg> {
         keymap()
             .on_override(key(KeyCode::Char('c')).ctrl(), Msg::Quit)

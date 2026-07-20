@@ -7,7 +7,7 @@ description: The element vocabulary that ships with eye-declare
 
 Every builder returns an `Element`; all compose freely.
 
-## `text(content)`
+## Text
 
 Word-wrapped styled text; newlines start new lines. `.style(…)` styles the
 current span, `.span(content, style)` appends further spans:
@@ -16,14 +16,14 @@ current span, `.span(content, style)` appends further spans:
 text("✓ ").style(green).span("done", Style::default())
 ```
 
-## `markdown(source)` <small>(feature `markdown`)</small>
+## Markdown (requires 'markdown' feature enabled)
 
 CommonMark via pulldown-cmark: headings, emphasis, inline code, fenced code
 blocks, lists. Word-wraps at render width with exact height measurement,
 and caches its parse within the frame. `.styles(MarkdownStyles { … })`
 overrides the palette.
 
-## `spinner(label)`
+## Spinner
 
 An animated activity indicator that requires zero app code to animate: it
 reports `animated() → ~80ms` and the runtime ticks while it's visible.
@@ -34,17 +34,17 @@ The glyph derives from wall-clock time, so there's no state to store.
 A label computed from wall-clock time (elapsed seconds, say) updates on the
 spinner's own ticks — view-side time needs no subscription.
 
-## `panel(child)`
+## Panel
 
 Border-and-title chrome: `.title(…)` (top-left), `.title_right(…)`,
 `.footer(…)` (bottom-right), `.border_style(…)`, `.title_style(…)`,
 `.pad_x(cols)` for interior padding. Forwards its child's cursor through
 the chrome, and suppresses it when there's no room to render.
 
-## `text_area(&state)`
+## Text Area
 
 The built-in multi-line input, strict-Elm style: contents and cursor live
-in a `TextAreaState` in *your* model; the element borrows it.
+in a `TextAreaState` in _your_ model; the element borrows it.
 
 ```rust
 // model
@@ -71,7 +71,7 @@ bindings, undo, and a kill ring, wrap
 [tui-textarea](https://crates.io/crates/tui-textarea) instead — the
 [components chapter](../guide/components.md) shows the adapter.
 
-## `viewport(lines)`
+## Viewport
 
 A fixed-height window over a list of lines showing the most recent content
 — live command output, log tails. `.height(rows)`, `.style(…)`,

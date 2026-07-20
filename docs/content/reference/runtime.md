@@ -5,7 +5,7 @@ description: run functions, options, and the headless core
 
 # Runtime & Drivers
 
-## The async driver <small>(feature `tokio`, default)</small>
+## The async driver
 
 ```rust
 #[tokio::main]
@@ -34,16 +34,16 @@ the tokio driver.
 Both entry points enable raw mode and bracketed paste for the duration and
 restore the terminal on exit, including panic unwind.
 
-## `RunOptions`
+## RunOptions
 
-| option | values | notes |
-|---|---|---|
+| option     | values                                            | notes                                                                                                                                          |
+| ---------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `keyboard` | `KeyboardProtocol::Legacy` (default) / `Enhanced` | `Enhanced` requests the kitty protocol's disambiguated escape codes (Shift+Enter vs Enter), falling back to legacy silently where unsupported. |
 
 The struct is `#[non_exhaustive]`; construct with `Default` and the
 setters.
 
-## `Runtime`: the headless core
+## Runtime: the headless core
 
 Both drivers are thin shells over `Runtime`, which is synchronous and does
 no I/O — events in, escape bytes out:
