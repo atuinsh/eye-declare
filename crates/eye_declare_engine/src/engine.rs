@@ -3,6 +3,8 @@
 //! `InlineRenderer` (Phase 2, step 2) — that type now delegates all
 //! terminal mechanics here and keeps only the component-tree concerns.
 
+use ratatui_core::buffer::Buffer;
+
 use crate::escape::CursorState;
 use crate::frame::Frame;
 
@@ -203,18 +205,75 @@ impl Engine {
         b"\x1b[2J\x1b[H".to_vec()
     }
 
-    /// Drop the top `committed_height` rows from tracking: they have fully
-    /// scrolled into terminal scrollback and will never be repainted.
-    /// Subsequent diffs only cover the remaining active region.
-    pub fn commit_scrolled(&mut self, committed_height: u16) {
+    /// Commit finished rows above the live tail (the v2 timeline surface).
+    ///
+    /// Presents `rows` as the whole frame — replacing the tail, not
+    /// stacking above it — then shifts them out of tracking via
+    /// [`commit_scrolled`](Engine::commit_scrolled). Presenting the block
+    /// alone is what makes sealing cheap and correct: in the common case
+    /// the block *was* the live tail a moment ago, so identical rows diff
+    /// to nothing and rows already burst-streamed into scrollback are
+    /// never re-emitted. (The earlier stack-above-the-tail formulation
+    /// re-streamed that overlap whenever block + tail exceeded the
+    /// terminal height: the transcript duplicated into scrollback and the
+    /// screen jumped by the block height.)
+    ///
+    /// The region is left empty; callers present the tail again afterward
+    /// (the runtime does so in the same flush). From the next present on,
+    /// the committed rows behave like any earlier terminal output:
+    /// unaddressable, immutable, drifting into scrollback naturally.
+    pub fn commit(&mut self, rows: &Buffer) -> Vec<u8> {
+        let committed_height = rows.area.height;
         if committed_height == 0 {
-            return;
+            return Vec::new();
         }
+
+        let mut output = self.present(Frame::new(rows.clone()), None);
+
+        // The next region origin is the row below the block. Make it
+        // physically exist with the cursor on it before the shift: an LF
+        // at the screen bottom scrolls one row, elsewhere it only moves
+        // down. This claims exactly the genuinely-new rows.
+        if self.cursor.row < committed_height {
+            output.push(b'\r');
+            self.cursor.col = 0;
+            let down = (committed_height - self.cursor.row) as usize;
+            output.resize(output.len() + down, b'\n');
+            self.cursor.row = committed_height;
+            self.emitted_rows = self.emitted_rows.max(committed_height + 1);
+        }
+
+        output.extend_from_slice(&self.commit_scrolled(committed_height));
+        output
+    }
+
+    /// Drop the top `committed_height` rows from tracking: a pure origin
+    /// shift — those rows become unaddressable and will never be repainted.
+    /// Subsequent diffs only cover the remaining active region.
+    ///
+    /// Invariant: the physical cursor must sit at or below the new origin
+    /// when the shift happens, or region coordinates would desync from the
+    /// terminal. If the cursor is parked above (e.g. the presenting frame's
+    /// cursor hint pointed into the committed rows), this emits a relative
+    /// move down to the new origin first — hence the returned bytes, which
+    /// are empty in the common case.
+    #[must_use]
+    pub fn commit_scrolled(&mut self, committed_height: u16) -> Vec<u8> {
+        if committed_height == 0 {
+            return Vec::new();
+        }
+
+        let mut output = Vec::new();
+        if self.cursor.row < committed_height {
+            crate::escape::write_relative_move(&mut output, &mut self.cursor, committed_height, 0);
+        }
+
         if let Some(ref prev) = self.prev_frame {
             self.prev_frame = Some(prev.slice_top_rows(committed_height));
         }
         self.emitted_rows = self.emitted_rows.saturating_sub(committed_height);
         self.cursor.row = self.cursor.row.saturating_sub(committed_height);
+        output
     }
 
     /// Reclaim trailing blank rows after the frame has shrunk.
@@ -319,5 +378,107 @@ impl Engine {
             // No cursor hint — hide cursor
             output.extend_from_slice(b"\x1b[?25l");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui_core::layout::Rect;
+
+    fn buffer_with_lines(width: u16, lines: &[&str]) -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, lines.len() as u16));
+        for (y, line) in lines.iter().enumerate() {
+            buf.set_stringn(
+                0,
+                y as u16,
+                line,
+                width as usize,
+                ratatui_core::style::Style::default(),
+            );
+        }
+        buf
+    }
+
+    #[test]
+    fn commit_scrolled_is_silent_when_cursor_below_origin() {
+        let mut engine = Engine::new(10, 24);
+        let _ = engine.present(Frame::new(buffer_with_lines(10, &["aaa", "bbb"])), None);
+        // Cursor ended on the last diffed row (row 1), at/below origin 1.
+        let bytes = engine.commit_scrolled(1);
+        assert!(bytes.is_empty());
+        assert_eq!(engine.emitted_rows(), 1);
+    }
+
+    #[test]
+    fn commit_scrolled_moves_cursor_parked_in_committed_rows() {
+        let mut engine = Engine::new(10, 24);
+        // Cursor hint parks the physical cursor at the very top row.
+        let _ = engine.present(
+            Frame::new(buffer_with_lines(10, &["aaa", "bbb"])),
+            Some((0, 0)),
+        );
+        let bytes = engine.commit_scrolled(1);
+        assert!(
+            !bytes.is_empty(),
+            "cursor above the new origin must be moved down before the shift"
+        );
+        assert_eq!(engine.cursor.row, 0, "cursor is at the new origin");
+        assert_eq!(engine.emitted_rows(), 1);
+    }
+
+    #[test]
+    fn commit_replaces_tail_and_leaves_an_empty_region() {
+        let mut engine = Engine::new(10, 24);
+        let _ = engine.present(Frame::new(buffer_with_lines(10, &["> tail"])), None);
+
+        let _ = engine.commit(&buffer_with_lines(10, &["block one", "block two"]));
+
+        // The block is gone from the engine's world; the region is the
+        // single claimed origin row, empty until the caller re-presents
+        // the tail (as the runtime does in the same flush).
+        assert_eq!(engine.emitted_rows(), 1);
+        let prev = engine.prev_frame.as_ref().unwrap();
+        assert_eq!(prev.area().height, 0);
+    }
+
+    #[test]
+    fn commit_of_the_presented_tail_emits_no_content_bytes() {
+        // The seal case: the block IS the previous tail. Nothing needs
+        // repainting — the only bytes claim the new origin row.
+        let mut engine = Engine::new(10, 24);
+        let content = buffer_with_lines(10, &["aaa", "bbb", "ccc"]);
+        let _ = engine.present(Frame::new(content.clone()), None);
+
+        let bytes = engine.commit(&content);
+        let printable: String = String::from_utf8_lossy(&bytes).into_owned();
+        assert!(
+            !printable.contains("aaa") && !printable.contains("ccc"),
+            "sealing identical content must not repaint it, got {printable:?}"
+        );
+        assert!(
+            printable.ends_with("\r\n"),
+            "seal should end by claiming the origin row, got {printable:?}"
+        );
+        assert_eq!(engine.emitted_rows(), 1);
+    }
+
+    #[test]
+    fn commit_with_empty_rows_is_a_no_op() {
+        let mut engine = Engine::new(10, 24);
+        let _ = engine.present(Frame::new(buffer_with_lines(10, &["> tail"])), None);
+        let bytes = engine.commit(&Buffer::empty(Rect::new(0, 0, 10, 0)));
+        assert!(bytes.is_empty());
+        assert_eq!(engine.emitted_rows(), 1);
+    }
+
+    #[test]
+    fn commit_before_any_present_works() {
+        let mut engine = Engine::new(10, 24);
+        let _ = engine.commit(&buffer_with_lines(10, &["hello"]));
+        // The claimed origin row below the block is the whole region.
+        assert_eq!(engine.emitted_rows(), 1);
+        let prev = engine.prev_frame.as_ref().unwrap();
+        assert_eq!(prev.area().height, 0);
     }
 }

@@ -1,0 +1,15 @@
+[package]
+name = "eye_declare_next"
+description = "Timeline/Elm inline TUI layer (v2 redesign, working name — see .planning/REDESIGN.md)"
+repository = "https://github.com/BinaryMuse/eye-declare"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+eye_declare_engine = { path = "../eye_declare_engine" }
+ratatui-core = "0.1"
+
+[dev-dependencies]
+eye_declare_engine = { path = "../eye_declare_engine", features = ["test-util"] }

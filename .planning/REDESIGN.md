@@ -312,12 +312,11 @@ Still open:
   behavior; massive simplification.)
 - **O4 — naming:** working names `eye_declare_engine` / `eye_declare_next`; real names
   (and whether v2 is `eye_declare 1.0` or a rename) decided at the end.
-- **O7 — is `Element<Msg>` vestigial? (new, from Port 4.)** With keymap-only
-  emission, nothing on `Element` carries `Msg`; `map_msg` is a phantom
-  re-wrap. A `Msg`-free `Element` would dissolve the `ElementExt`/`Fluent`
-  trait split and all `Msg`-inference concerns. Counterpoint: element-level
-  `on_click` might want it back for mouse support (alternative: runtime
-  hit-testing routed through focus/keymap). Lean: build `Msg`-free first.
+- **O7 — RESOLVED → `Element` is `Msg`-free** (built that way in
+  `eye_declare_next`; dissolved the `ElementExt<Msg>`/`Fluent` split and
+  all `Msg`-inference concerns). Revisit only if mouse support wants
+  element-level emission; runtime hit-testing → focus/keymap is the
+  planned alternative.
 
 ## Bake-off outcomes (Phase 1 exit criteria)
 
@@ -351,6 +350,19 @@ Still open:
    is the clear-and-redraw fallback). No crossterm dependency in the engine.
    **← Phase 4 next**
 4. **Build the new layer** — new crate, driven by ports of the current `examples/`.
+   **In progress** (`crates/eye_declare_next`, working name):
+   - Slice 1 ✅ (2026-07-15): `Msg`-free element layer — `Element` with
+     required `height(width)`, `AnyElement<'a>` borrowing views, `Col`/`Row`/
+     `Padded`/`Empty`/`Text`/wall-clock `Spinner`, engine-composition tests.
+   - Slice 2 ✅ (2026-07-15): `Engine::commit(rows)` (the v2 append-commit,
+     built on present + `commit_scrolled`), `commit_scrolled` hardened to
+     return cursor-repositioning bytes (the parked-cursor invariant lives in
+     the engine now), and the sync `Timeline` runtime (`push`/`present`/
+     `finalize`) with conversation-flow tests through the VTE terminal.
+   - Next slices: keymap/focus/events + `App`/`update` loop → async driver
+     (tokio, `spawn`/`Task`/subscriptions, animation self-tick) → widgets
+     (`TextAreaState`, feature-flagged markdown, viewport) → resize story
+     (needs O3 decided).
 5. **Atuin AI port** — the validation gate. Success = the four adapters
    (`DriverEventSender`, `sync_view_state`, key-parsing `on_commit`, `active`-prop focus
    shadow) delete cleanly and the TUI code shrinks.
