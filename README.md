@@ -26,7 +26,7 @@ re-run every frame, pure, cheap because it's small.
 
 If you've written Elm, iced, or Redux, the rest is familiar: your struct is
 the model, messages drive `update`, async work arrives as streams of
-messages, and cancellation is dropping a handle. What the design *removes* is
+messages, and cancellation is dropping a handle. What the design _removes_ is
 the point — there's no reconciliation, no keys, no dirty tracking, no
 framework-owned widget state, and no hidden focus registry, because a
 timeline needs none of them.
@@ -94,7 +94,7 @@ cargo run --release --example openrouter
 
 - **Fluent builders, no macro DSL** — views are plain Rust (`col()`,
   `.when(…)`, iterators), with full rust-analyzer support.
-- **Strict-Elm state** — widget state (text areas, selects) lives in *your*
+- **Strict-Elm state** — widget state (text areas, selects) lives in _your_
   model as plain values. Everything is constructible and testable.
 - **Keys are data** — a `Keymap` rebuilt from the model each update makes
   conditional bindings one-liners and mode conflicts impossible.
@@ -111,13 +111,13 @@ cargo run --release --example openrouter
 
 ## Documentation
 
-The [book](https://eye-declare.dev) covers everything: the
-[introduction](https://eye-declare.dev/getting-started/introduction) explains
-the design; the [quick start](https://eye-declare.dev/getting-started/quick-start)
+The [book](https://eye-declare.rs) covers everything: the
+[introduction](https://eye-declare.rs/getting-started/introduction) explains
+the design; the [quick start](https://eye-declare.rs/getting-started/quick-start)
 builds a working app in sixty lines; guide chapters cover the timeline,
 elements, input, async, components-as-a-convention, testing, and
 performance. Migrating from 0.5? There's a
-[dedicated chapter](https://eye-declare.dev/reference/migration).
+[dedicated chapter](https://eye-declare.rs/reference/migration).
 
 ## Status
 

@@ -1,7 +1,7 @@
 site:
   name: eye-declare
   description: Inline terminal UIs for Rust — timeline-first, Elm-shaped
-  url: https://eye-declare.dev
+  url: https://eye-declare.rs
   repository: https://github.com/atuinsh/eye-declare
 
 sources:
