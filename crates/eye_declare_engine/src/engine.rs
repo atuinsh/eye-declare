@@ -152,10 +152,27 @@ impl Engine {
         // if the frame previously shrank, some emitted rows are unused
         // and can absorb part (or all) of the growth without new newlines.
         let new_rows_needed = new_height.saturating_sub(self.emitted_rows);
-        if new_rows_needed > 0 {
+        if new_rows_needed > 0 && self.emitted_rows == 0 {
+            // Growing out of an empty region: the cursor already sits on
+            // the row that becomes row 0, so claim with n-1 newlines —
+            // the same adjustment the first-render path makes. Claiming n
+            // would leave cursor.row == emitted_rows (one past the
+            // bottom), and the next growth's move-to-bottom would snap
+            // tracking up a row without emitting any movement, painting
+            // everything one row below where the engine believes it is.
+            output.push(b'\r');
+            self.cursor.col = 0;
+            output.resize(output.len() + new_rows_needed as usize - 1, b'\n');
+            self.emitted_rows = new_height;
+            self.cursor.row = new_height - 1;
+        } else if new_rows_needed > 0 {
             // Move cursor to the bottom of our current region first
             // (it might be somewhere in the middle from the last write)
             let current_bottom = self.emitted_rows.saturating_sub(1);
+            debug_assert!(
+                self.cursor.row <= current_bottom,
+                "cursor tracked below the region bottom"
+            );
             if self.cursor.row < current_bottom {
                 let down = current_bottom - self.cursor.row;
                 output.extend_from_slice(format!("\x1b[{}B", down).as_bytes());
