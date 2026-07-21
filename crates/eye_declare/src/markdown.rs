@@ -208,7 +208,10 @@ enum Block {
 /// the row is emitted, and zero-width controls drive ratatui's word
 /// wrapper out of bounds (found by fuzzing: `"\0[佉x"` at width 2 panics
 /// inside `Paragraph::render`).
-fn sanitize(s: &str) -> String {
+fn sanitize(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.chars().any(char::is_control) {
+        return std::borrow::Cow::Borrowed(s);
+    }
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -217,7 +220,7 @@ fn sanitize(s: &str) -> String {
             c => out.push(c),
         }
     }
-    out
+    std::borrow::Cow::Owned(out)
 }
 
 struct Table {
@@ -532,7 +535,7 @@ fn parse(source: &str, styles: &MarkdownStyles) -> Vec<Block> {
                 }
             }
             Event::Code(code) => {
-                let span = Span::styled(sanitize(&code), styles.code_inline);
+                let span = Span::styled(sanitize(&code).into_owned(), styles.code_inline);
                 match table.as_mut() {
                     Some(t) if t.in_cell => t.cell.push(span),
                     Some(_) => {}
@@ -543,7 +546,7 @@ fn parse(source: &str, styles: &MarkdownStyles) -> Vec<Block> {
                 if let Some(t) = table.as_mut() {
                     if t.in_cell {
                         let style = style_stack.last().copied().unwrap_or(styles.base);
-                        t.cell.push(Span::styled(sanitize(&text), style));
+                        t.cell.push(Span::styled(sanitize(&text).into_owned(), style));
                     }
                     continue;
                 }
