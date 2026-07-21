@@ -60,6 +60,32 @@ arbitrary geometry and op interleavings that example-based tests miss.
   `engine_compose::growing_tail_from_empty_keeps_cursor_sync`; the grow
   path now carries a `debug_assert!` for the invariant
   (`cursor.row <= current_bottom`).
+- **TextArea cursor past end-of-line on paste** (fixed, `text_area_ops`):
+  pasting text that begins with a combining mark merges it into the
+  grapheme before the cursor, so `insert_str`'s
+  `col += grapheme_count(part)` overshot the line end (violating the
+  cursor-on-a-real-grapheme invariant that all later `byte_at` slicing
+  assumes). Now recounts from the actual line content, like
+  `insert_char` already did. Regression test:
+  `text_area::tests::paste_starting_with_combining_mark_keeps_cursor_in_bounds`.
+- **Markdown control characters flowed into cell symbols** (fixed,
+  `markdown_element` via the input `"\0[佉&"`): parse passed raw text
+  through, so a NUL/ESC in a document became cell content — an ESC would
+  splice straight into the terminal's escape stream when the row is
+  emitted. `parse` now sanitizes text and code events (tabs expand to
+  four spaces, other controls become U+FFFD).
+- **Upstream: ratatui word wrapper writes out of bounds** (worked around,
+  same input): a wide char alone in a span starting at the last column
+  with another span following makes `Paragraph::render` (Wrap, ratatui
+  0.1.2 core / 0.3 widgets) index past the buffer edge. Minimal repro,
+  no eye-declare involved: spans `["a", "佉", "b"]`, `Wrap {trim:false}`,
+  2×16 buffer — `line_count(2)` also disagrees with itself (claims 3, or
+  9 on the fuzz input). Worth reporting upstream. eye-declare's parse now
+  merges adjacent same-style spans (also an alloc/layout win), which
+  removes every unstyled instance of the shape; styled wide chars
+  (`**佉**x`) can still hit it, so `markdown_element` filters wide glyphs
+  from its corpus until the upstream fix. Regression test:
+  `markdown::tests::fragmented_spans_with_wide_chars_render_safely`.
 
 ## Not yet covered
 
@@ -70,3 +96,5 @@ arbitrary geometry and op interleavings that example-based tests miss.
   plain text; styles pass through untested).
 - The engine's `commit`/`finalize` ops directly — `runtime_transcript`
   exercises them only through `Timeline`'s usage.
+- Wide glyphs in `markdown_element` (filtered out pending the upstream
+  ratatui wrapper fix above).

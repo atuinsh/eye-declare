@@ -202,6 +202,24 @@ enum Block {
     Table(Table),
 }
 
+/// Make text safe to become cell symbols: tabs expand to spaces, other
+/// control characters become U+FFFD. Raw controls in a cell are hazardous
+/// twice over — an ESC would splice into the terminal's escape stream when
+/// the row is emitted, and zero-width controls drive ratatui's word
+/// wrapper out of bounds (found by fuzzing: `"\0[佉x"` at width 2 panics
+/// inside `Paragraph::render`).
+fn sanitize(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\t' => out.push_str("    "),
+            c if c.is_control() => out.push('\u{FFFD}'),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 struct Table {
     alignments: Vec<Alignment>,
     /// Header cells; every row has exactly `alignments.len()` cells.
@@ -514,7 +532,7 @@ fn parse(source: &str, styles: &MarkdownStyles) -> Vec<Block> {
                 }
             }
             Event::Code(code) => {
-                let span = Span::styled(code.to_string(), styles.code_inline);
+                let span = Span::styled(sanitize(&code), styles.code_inline);
                 match table.as_mut() {
                     Some(t) if t.in_cell => t.cell.push(span),
                     Some(_) => {}
@@ -525,7 +543,7 @@ fn parse(source: &str, styles: &MarkdownStyles) -> Vec<Block> {
                 if let Some(t) = table.as_mut() {
                     if t.in_cell {
                         let style = style_stack.last().copied().unwrap_or(styles.base);
-                        t.cell.push(Span::styled(text.to_string(), style));
+                        t.cell.push(Span::styled(sanitize(&text), style));
                     }
                     continue;
                 }
@@ -541,6 +559,7 @@ fn parse(source: &str, styles: &MarkdownStyles) -> Vec<Block> {
                         lines.push(Vec::new());
                     }
                     if !part.is_empty() {
+                        let part = sanitize(part);
                         lines[current_line]
                             .push(Span::styled(format!("{prefix}{part}"), current_style));
                     }
@@ -710,6 +729,24 @@ fn flush_text(
 ) {
     while lines.last().is_some_and(|l| l.is_empty()) {
         lines.pop();
+    }
+    // Merge adjacent same-style spans. pulldown-cmark fragments plain text
+    // into many events ("[", entities, replacement chars), and span count
+    // is not free downstream: every span is a wrap-layout boundary, and
+    // ratatui's word wrapper mishandles one of them — a wide char alone in
+    // a span at the last column with another span following writes past
+    // the buffer edge (fuzz-found; upstream bug, spans ["a","佉","b"] at
+    // width 2 panic Paragraph::render). Merging removes every unstyled
+    // instance of that shape.
+    for line in lines.iter_mut() {
+        line.dedup_by(|next, prev| {
+            if next.style == prev.style {
+                prev.content.to_mut().push_str(&next.content);
+                true
+            } else {
+                false
+            }
+        });
     }
     if !lines.is_empty() {
         let taken = std::mem::take(lines);
@@ -1166,5 +1203,32 @@ mod tests {
         assert_eq!(cell_count("| a | b |"), 2);
         assert_eq!(cell_count("| a \\| b |"), 1);
         assert_eq!(cell_count("|"), 1);
+    }
+
+    /// Found by fuzzing (fuzz/fuzz_targets/markdown_element.rs):
+    /// `"\0[佉&"` at width 2 panicked with an out-of-bounds buffer write
+    /// inside ratatui's word wrapper — its trigger is a wide char alone in
+    /// a span at the last column with another span following (upstream
+    /// bug). Merging adjacent same-style spans removes every unstyled
+    /// instance of that shape from parse output.
+    #[test]
+    fn fragmented_spans_with_wide_chars_render_safely() {
+        let el = markdown("\u{0}[\u{4f49}&");
+        for width in 1..8 {
+            let height = Element::height(&el, width);
+            let area = Rect::new(0, 0, width, height);
+            let mut buf = Buffer::empty(area);
+            el.render(area, &mut buf); // must not panic
+        }
+    }
+
+    /// Raw control characters must never survive into span content: an
+    /// ESC would splice into the terminal's escape stream when the row is
+    /// emitted, and zero-width controls confuse wrap layout. Tabs expand;
+    /// everything else becomes U+FFFD.
+    #[test]
+    fn control_chars_are_sanitized() {
+        let lines = rendered(&markdown("a\u{0}b\tc\u{1b}[31m"), 40);
+        assert_eq!(lines, vec!["a\u{fffd}b    c\u{fffd}[31m"]);
     }
 }

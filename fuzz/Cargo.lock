@@ -235,6 +235,7 @@ dependencies = [
  "libfuzzer-sys",
  "ratatui-core",
  "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]
