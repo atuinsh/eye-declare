@@ -28,13 +28,15 @@ arbitrary geometry and op interleavings that example-based tests miss.
 ## Targets
 
 - `runtime_transcript` — the star. Drives a whole app headlessly
-  (`Runtime` + `TestTerminal`) with arbitrary push/set-tail/re-present
-  sequences and asserts the terminal always shows: every committed block,
-  in order, exactly once, then the current tail, then blanks. Content is
-  short width-1 ASCII and geometry is fixed per run because `TestTerminal`
-  models neither wide glyphs nor resize — teaching it both would let this
-  target cover the (mutation-flagged, still weakly tested) resize and
-  wide-char paths.
+  (`Runtime` + `TestTerminal`) with arbitrary push/set-tail/re-present/
+  resize sequences — content mixes ASCII with double-width CJK — and
+  asserts the terminal always shows: every committed block, in order,
+  exactly once, then the current tail, then blanks. `TestTerminal` models
+  wide glyphs (continuation cells, whole-glyph wrap at the right edge,
+  orphaned halves on overwrite) and non-reflowing resize for this;
+  the emulator has its own behavior suite in
+  `eye_declare_engine/tests/test_terminal_behavior.rs`, since it is the
+  oracle everything else leans on.
 - `text_area_ops` — arbitrary editing sequences on `TextAreaState`
   (arbitrary unicode: combining marks, wide glyphs) with invariants: the
   cursor stays on a real grapheme boundary of a real line, `line_count()`
@@ -87,14 +89,34 @@ arbitrary geometry and op interleavings that example-based tests miss.
   from its corpus until the upstream fix. Regression test:
   `markdown::tests::fragmented_spans_with_wide_chars_render_safely`.
 
+- **Wide glyph destroyed by its own diff** (fixed, found seconds after
+  teaching the differential target CJK content): `Frame::diff_from`'s
+  height-mismatch path compared cells with no wide-glyph discipline, so
+  the trailing continuation cell of a freshly written wide glyph (blank
+  in the new frame, old content in the previous one) was emitted as its
+  own update — painting a space over half the glyph. A tail changing
+  height from 2 rows to 1 lost its 日 entirely. The hand-rolled path now
+  mirrors `Buffer::diff`'s skip/invalidate rules. Same family as
+  upstream ratatui#2652 (trailing cell stale on style-only change),
+  which still affects the equal-dimensions fast path — see below.
+  Regression test: `engine_compose::wide_glyph_survives_tail_height_change`.
+
+After the fixes, the extended differential (resize + CJK) runs clean:
+~200k executions over 5 minutes with resize hitting `reset_region` and
+`set_terminal_height` — the paths mutation testing found completely
+untested now hold up under arbitrary interleavings.
+
 ## Not yet covered
 
-- Resize and wide-char content in the differential target (blocked on
-  `TestTerminal` support for both; the emulator treats every char as one
-  column and has a fixed size).
 - Styled content in the differential model (`viewport_lines` is
-  plain text; styles pass through untested).
+  plain text; styles pass through untested). This is what would catch
+  upstream ratatui#2652 (`Buffer::diff` leaves the trailing cell of a
+  wide glyph stale on style-only changes), which eye-declare inherits
+  through the equal-dimensions diff fast path.
 - The engine's `commit`/`finalize` ops directly — `runtime_transcript`
   exercises them only through `Timeline`'s usage.
 - Wide glyphs in `markdown_element` (filtered out pending the upstream
   ratatui wrapper fix above).
+- Terminal reflow on resize: the emulator clips/pads without reflowing,
+  matching the engine's committed-content promise; reflowing terminals
+  are out of model.
