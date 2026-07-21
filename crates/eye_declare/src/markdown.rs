@@ -233,6 +233,29 @@ struct Table {
     open: bool,
 }
 
+/// Append content to a line (flow text or a table cell), merging into the
+/// last span when styles match. pulldown-cmark fragments plain text into
+/// many events ("[", entities, replacement chars), and span count is not
+/// free downstream: every span is a wrap-layout boundary, and ratatui's
+/// word wrapper mishandles one of them — a wide char alone in a span at
+/// the last column with another span following writes past the buffer
+/// edge (fuzz-found; upstream bug, spans ["a","佉","b"] at width 2 panic
+/// Paragraph::render). Merging removes every unstyled instance of that
+/// shape.
+fn push_merged(
+    line: &mut Vec<Span<'static>>,
+    content: impl Into<String> + AsRef<str>,
+    style: Style,
+) {
+    if let Some(last) = line.last_mut()
+        && last.style == style
+    {
+        last.content.to_mut().push_str(content.as_ref());
+    } else {
+        line.push(Span::styled(content.into(), style));
+    }
+}
+
 enum BlockLayout {
     Text {
         rows: u16,
@@ -535,18 +558,18 @@ fn parse(source: &str, styles: &MarkdownStyles) -> Vec<Block> {
                 }
             }
             Event::Code(code) => {
-                let span = Span::styled(sanitize(&code).into_owned(), styles.code_inline);
-                match table.as_mut() {
-                    Some(t) if t.in_cell => t.cell.push(span),
-                    Some(_) => {}
-                    None => lines[current_line].push(span),
-                }
+                let dest = match table.as_mut() {
+                    Some(t) if t.in_cell => &mut t.cell,
+                    Some(_) => continue,
+                    None => &mut lines[current_line],
+                };
+                push_merged(dest, sanitize(&code), styles.code_inline);
             }
             Event::Text(text) => {
                 if let Some(t) = table.as_mut() {
                     if t.in_cell {
                         let style = style_stack.last().copied().unwrap_or(styles.base);
-                        t.cell.push(Span::styled(sanitize(&text).into_owned(), style));
+                        push_merged(&mut t.cell, sanitize(&text), style);
                     }
                     continue;
                 }
@@ -563,19 +586,26 @@ fn parse(source: &str, styles: &MarkdownStyles) -> Vec<Block> {
                     }
                     if !part.is_empty() {
                         let part = sanitize(part);
-                        lines[current_line]
-                            .push(Span::styled(format!("{prefix}{part}"), current_style));
+                        if prefix.is_empty() {
+                            push_merged(&mut lines[current_line], part, current_style);
+                        } else {
+                            push_merged(
+                                &mut lines[current_line],
+                                format!("{prefix}{part}"),
+                                current_style,
+                            );
+                        }
                     }
                 }
             }
             Event::SoftBreak => {
                 let current_style = style_stack.last().copied().unwrap_or(styles.base);
-                let span = Span::styled(" ", current_style);
-                match table.as_mut() {
-                    Some(t) if t.in_cell => t.cell.push(span),
-                    Some(_) => {}
-                    None => lines[current_line].push(span),
-                }
+                let dest = match table.as_mut() {
+                    Some(t) if t.in_cell => &mut t.cell,
+                    Some(_) => continue,
+                    None => &mut lines[current_line],
+                };
+                push_merged(dest, " ", current_style);
             }
             Event::HardBreak => {
                 match table.as_mut() {
@@ -583,7 +613,7 @@ fn parse(source: &str, styles: &MarkdownStyles) -> Vec<Block> {
                     // space.
                     Some(t) if t.in_cell => {
                         let style = style_stack.last().copied().unwrap_or(styles.base);
-                        t.cell.push(Span::styled(" ", style));
+                        push_merged(&mut t.cell, " ", style);
                     }
                     Some(_) => {}
                     None => {
@@ -732,24 +762,6 @@ fn flush_text(
 ) {
     while lines.last().is_some_and(|l| l.is_empty()) {
         lines.pop();
-    }
-    // Merge adjacent same-style spans. pulldown-cmark fragments plain text
-    // into many events ("[", entities, replacement chars), and span count
-    // is not free downstream: every span is a wrap-layout boundary, and
-    // ratatui's word wrapper mishandles one of them — a wide char alone in
-    // a span at the last column with another span following writes past
-    // the buffer edge (fuzz-found; upstream bug, spans ["a","佉","b"] at
-    // width 2 panic Paragraph::render). Merging removes every unstyled
-    // instance of that shape.
-    for line in lines.iter_mut() {
-        line.dedup_by(|next, prev| {
-            if next.style == prev.style {
-                prev.content.to_mut().push_str(&next.content);
-                true
-            } else {
-                false
-            }
-        });
     }
     if !lines.is_empty() {
         let taken = std::mem::take(lines);

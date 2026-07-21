@@ -4,10 +4,8 @@
 //!
 //! The invariant is the library's core promise: the terminal always shows
 //! every committed block, in push order, exactly once, with the current
-//! tail below them and nothing else. The emulator models chars as width 1
-//! and never resizes, so content is short width-1 ASCII lines and geometry
-//! is fixed per run — wide-char and resize coverage needs TestTerminal
-//! support first.
+//! tail below them and nothing else — across typing, pushes, animation
+//! re-presents, resizes, and CJK content.
 
 #![no_main]
 
@@ -16,17 +14,30 @@ use eye_declare::{App, Ctx, Element, Runtime, col, text};
 use eye_declare_engine::test_terminal::TestTerminal;
 use libfuzzer_sys::fuzz_target;
 
-/// A line short enough (<= 6 cols) to never wrap at the narrowest
-/// generated terminal (8 cols), from printable ASCII only.
+/// A line short enough (<= 6 display columns) to never wrap at the
+/// narrowest generated terminal (8 cols): printable ASCII plus a few
+/// double-width CJK glyphs.
 #[derive(Debug, Clone)]
 struct Line(String);
 
+/// Width-2 glyphs the emulator and engine must agree on.
+const WIDE: [char; 4] = ['日', '本', '佉', '唱'];
+
 impl<'a> Arbitrary<'a> for Line {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
-        let len = u.int_in_range(0..=6)?;
-        let mut s = String::with_capacity(len);
-        for _ in 0..len {
-            s.push(char::from(u.int_in_range(32u8..=126)?));
+        let mut s = String::new();
+        let mut cols = 0;
+        while cols < 6 && u.arbitrary::<bool>()? {
+            if u.ratio(1u8, 4)? {
+                if cols + 2 > 6 {
+                    break;
+                }
+                s.push(*u.choose(&WIDE)?);
+                cols += 2;
+            } else {
+                s.push(char::from(u.int_in_range(32u8..=126)?));
+                cols += 1;
+            }
         }
         Ok(Line(s))
     }
@@ -41,6 +52,9 @@ enum Op {
     Push(Vec<Line>),
     /// Re-present without a model change (animation tick path).
     Present,
+    /// The terminal changed size; the runtime erases and repaints the
+    /// live region (committed content keeps whatever the terminal did).
+    Resize(u8, u8),
 }
 
 #[derive(Debug, Arbitrary)]
@@ -127,6 +141,15 @@ fuzz_target!(|session: Session| {
             }
             Op::Present => {
                 let bytes = rt.present();
+                term.feed(&bytes);
+            }
+            Op::Resize(w_raw, h_raw) => {
+                let w = 8 + (w_raw % 25) as u16; // 8..=32
+                let h = 8 + (h_raw % 13) as u16; // 8..=20
+                // The terminal changes size first (SIGWINCH), then the
+                // runtime reacts.
+                term.resize(w as usize, h as usize);
+                let bytes = rt.resize(w, h);
                 term.feed(&bytes);
             }
         }

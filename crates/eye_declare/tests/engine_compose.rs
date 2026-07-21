@@ -130,3 +130,22 @@ fn growing_tail_from_empty_keeps_cursor_sync() {
         term.viewport_lines()
     );
 }
+/// Found by fuzzing (fuzz/fuzz_targets/runtime_transcript.rs): when the
+/// frame height changes, diff_from takes its hand-rolled path, which
+/// compared cell-by-cell with no wide-glyph discipline. The new frame's
+/// trailing continuation cell (reset to a blank by ratatui) diffed
+/// against the old content there and was emitted as its own update —
+/// painting a space over the second column of the glyph just written.
+#[test]
+fn wide_glyph_survives_tail_height_change() {
+    let width = 13;
+    let mut engine = Engine::new(width, 9);
+    let mut term = TestTerminal::new(13, 9);
+    term.feed(&engine.present(to_frame(&col(), width), None));
+    term.feed(&engine.present(
+        to_frame(&col().child(text("!*")).child(text("")), width),
+        None,
+    ));
+    term.feed(&engine.present(to_frame(&col().child(text("日")), width), None));
+    assert_eq!(term.viewport_lines()[0], "日");
+}
