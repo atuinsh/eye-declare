@@ -728,6 +728,12 @@ fn flush_text(
 /// trailing lines look like a table without a finished delimiter row,
 /// synthesize one matching the header's current cell count — re-cooked
 /// every frame, the table grows a column at a time as pipes arrive.
+///
+/// Headers without a leading pipe (`Name | Age`, valid GFM) are
+/// deliberately not speculated: mid-stream they are indistinguishable
+/// from prose that happens to contain a pipe, and a spurious table
+/// flashing over a sentence is worse than the one-time reflow those
+/// tables get when their real delimiter row completes.
 fn cook_streaming_tail(source: &str) -> Cow<'_, str> {
     // A single trailing newline is still mid-table (the delimiter row may
     // be the next chunk): scan without it, but remember that the last line
@@ -742,18 +748,34 @@ fn cook_streaming_tail(source: &str) -> Cow<'_, str> {
 
     // Find the trailing run of `|`-prefixed lines, ignoring anything
     // inside a fenced code block (pipes there are content, not cells).
-    let mut in_fence = false;
+    // A fence only closes on its own marker: a `~~~` line inside a
+    // backtick fence is code, not a boundary.
+    let mut fence: Option<char> = None;
     let mut first: Option<&str> = None;
     let mut second: Option<(usize, &str)> = None;
     let mut run_len = 0usize;
     let mut offset = 0usize;
     for line in scan.split('\n') {
         let trimmed = line.trim_start();
-        let fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
-        if fence {
-            in_fence = !in_fence;
-        }
-        if fence || in_fence || !trimmed.starts_with('|') {
+        let marker = if trimmed.starts_with("```") {
+            Some('`')
+        } else if trimmed.starts_with("~~~") {
+            Some('~')
+        } else {
+            None
+        };
+        let boundary = match (fence, marker) {
+            (None, Some(m)) => {
+                fence = Some(m);
+                true
+            }
+            (Some(f), Some(m)) if f == m => {
+                fence = None;
+                true
+            }
+            _ => false,
+        };
+        if boundary || fence.is_some() || !trimmed.starts_with('|') {
             first = None;
             second = None;
             run_len = 0;
@@ -774,6 +796,12 @@ fn cook_streaming_tail(source: &str) -> Cow<'_, str> {
     let Some(header) = first else {
         return Cow::Borrowed(source);
     };
+    // pulldown rejects a header that is a lone `|` with no cell content
+    // and no second pipe; synthesizing under one would fall back to a
+    // paragraph and leak the synthetic delimiter as visible text.
+    if header.trim() == "|" {
+        return Cow::Borrowed(source);
+    }
     match (run_len, second) {
         // Header alone: no delimiter row yet.
         (1, _) => {
@@ -1099,6 +1127,35 @@ mod tests {
                 el.render(area, &mut buf);
             }
         }
+    }
+
+    #[test]
+    fn streaming_lone_pipe_stays_raw() {
+        // pulldown rejects a `|`-only header row, so synthesis would fall
+        // back to a paragraph and show the synthetic delimiter as text.
+        for src in ["|", "| ", "|\n"] {
+            assert_eq!(rendered(&markdown(src).streaming(true), 20), vec!["|"]);
+        }
+    }
+
+    #[test]
+    fn streaming_empty_cell_header_still_speculates() {
+        // `||` is a header pulldown accepts; the lone-pipe guard must not
+        // swallow it.
+        let lines = rendered(&markdown("||").streaming(true), 20);
+        assert!(lines[0].starts_with('┌'), "got {lines:?}");
+    }
+
+    #[test]
+    fn streaming_fence_marker_mismatch_stays_code() {
+        // A `~~~` line inside a backtick fence is code, not a fence
+        // boundary; pipes after it must not be cooked into a table.
+        let lines = rendered(&markdown("```\n~~~\n| a | b |").streaming(true), 20);
+        assert!(lines.iter().any(|l| l == "  | a | b |"), "got {lines:?}");
+        assert!(
+            !lines.iter().any(|l| l.contains('┌') || l.contains("---")),
+            "synthetic delimiter leaked: {lines:?}"
+        );
     }
 
     #[test]
