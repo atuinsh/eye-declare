@@ -1,3 +1,8 @@
+## [0.6.3](https://github.com/atuinsh/eye-declare/compare/v0.6.2..v0.6.3) - 2026-07-22
+
+### 🐛 Bug Fixes
+
+- Park the cursor below the tail on exit ([#51](https://github.com/atuinsh/eye-declare/issues/51)) - ([eba355a](https://github.com/atuinsh/eye-declare/commit/eba355afa55d953866e4ee086be9dd45fd2c6294))
 ## [0.6.2](https://github.com/atuinsh/eye-declare/compare/v0.6.1..v0.6.2) - 2026-07-22
 
 ### ⛰️ Features
