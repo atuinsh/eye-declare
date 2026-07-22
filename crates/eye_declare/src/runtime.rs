@@ -60,8 +60,16 @@ where
 
     /// First bytes to write and any exit [`App::init`] requested — what a
     /// driver calls once before its loop, instead of a bare `present`.
+    ///
+    /// An init-requested exit skips the message loop, so the shell
+    /// handoff is appended here rather than by `process_batch`.
     pub fn startup(&mut self) -> (Vec<u8>, Option<A::Output>) {
-        (self.present(), self.init_exit.take())
+        let mut bytes = self.present();
+        let exit = self.init_exit.take();
+        if exit.is_some() {
+            bytes.extend_from_slice(&self.timeline.finalize());
+        }
+        (bytes, exit)
     }
 
     /// Feed one input event. Resolves it through the app's keymap; if a
@@ -145,6 +153,15 @@ where
         let mut bytes = self.timeline.resize(width);
         bytes.extend_from_slice(&self.present());
         bytes
+    }
+
+    /// Shell handoff for exits that bypass the message loop: park the
+    /// cursor at column 0 below the content. Message-driven exits get
+    /// this automatically from [`process_batch`](Runtime::process_batch);
+    /// custom drivers that exit for their own reasons (e.g. stdin
+    /// closing) write these bytes last.
+    pub fn finalize(&mut self) -> Vec<u8> {
+        self.timeline.finalize()
     }
 
     /// The wrapped app, for inspection after exit (tests) or state peeks.

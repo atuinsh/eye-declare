@@ -81,8 +81,9 @@ where
                     Some(Ok(Event::Resize(w, h))) => (runtime.resize(w, h), None),
                     Some(Ok(_)) => (Vec::new(), None),
                     Some(Err(e)) => return Err(e),
-                    // Terminal input ended (stdin closed): exit cleanly.
-                    None => (Vec::new(), Some(A::Output::default())),
+                    // Terminal input ended (stdin closed): exit cleanly,
+                    // with the shell handoff process_batch would have done.
+                    None => (runtime.finalize(), Some(A::Output::default())),
                 }
             }
 

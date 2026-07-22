@@ -159,6 +159,46 @@ fn echo_session_end_to_end() {
 }
 
 #[test]
+fn init_exit_parks_cursor_below_content() {
+    // An exit requested from App::init bypasses the message loop, so the
+    // shell handoff must come from startup() itself.
+    struct PrintAndQuit;
+
+    impl App for PrintAndQuit {
+        type Msg = ();
+        type Output = ();
+
+        fn init(&mut self, ctx: &mut Ctx<'_, Self>) {
+            ctx.push(text("one-shot output"));
+            ctx.exit(());
+        }
+
+        fn update(&mut self, _msg: (), _ctx: &mut Ctx<'_, Self>) {}
+
+        fn tail(&self) -> impl Element + '_ {
+            text("tail line")
+        }
+
+        fn keymap(&self) -> Keymap<()> {
+            keymap()
+        }
+    }
+
+    let mut rt = Runtime::new(PrintAndQuit, 20, 24);
+    let mut term = TestTerminal::new(20, 24);
+
+    let (bytes, exit) = rt.startup();
+    term.feed(&bytes);
+    assert!(exit.is_some());
+
+    assert_eq!(term.viewport_lines()[0], "one-shot output");
+    assert_eq!(term.viewport_lines()[1], "tail line");
+    assert_eq!(term.cursor(), (2, 0));
+    term.feed(b"$ prompt");
+    assert_eq!(term.viewport_lines()[2], "$ prompt");
+}
+
+#[test]
 fn tail_hidden_before_deferred_exit_leaves_no_gap() {
     // The Atuin AI exit shape: one update hides the tail (the input box
     // disappears in its own frame), a later message actually exits. The
