@@ -71,8 +71,9 @@ impl Timeline {
         self.engine.reset_region(new_width)
     }
 
-    /// Reclaim trailing blank rows for shell handoff (call after a final
-    /// `present` of a shrunken or empty tail).
+    /// Hand the terminal back to the shell: park the cursor at column 0
+    /// on the row after the last content row, reclaiming any rows a
+    /// shrunken or empty tail vacated (call after a final `present`).
     pub fn finalize(&mut self) -> Vec<u8> {
         self.engine.finalize()
     }

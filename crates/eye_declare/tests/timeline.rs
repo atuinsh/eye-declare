@@ -113,6 +113,53 @@ fn empty_tail_and_finalize_hand_back_to_shell() {
     assert_eq!(term.cursor(), (1, 0));
 }
 
+#[test]
+fn finalize_with_visible_tail_opens_a_fresh_line() {
+    let mut tl = Timeline::new(20, 24);
+    let mut term = TestTerminal::new(20, 24);
+
+    term.feed(&tl.push(text("done: ok")));
+    term.feed(&tl.present(&text("> bye")));
+    // Exit without clearing the tail: the tail stays on screen and the
+    // cursor must still land on a fresh line below it.
+    term.feed(&tl.finalize());
+
+    assert_eq!(term.cursor(), (2, 0));
+    // A repeated finalize is a no-op, not another blank line.
+    assert!(tl.finalize().is_empty());
+
+    // What the process prints after run() returns lands below the tail,
+    // not on top of it.
+    term.feed(b"echoed 1 line(s)\r\n");
+    assert_eq!(term.viewport_lines()[0], "done: ok");
+    assert_eq!(term.viewport_lines()[1], "> bye");
+    assert_eq!(term.viewport_lines()[2], "echoed 1 line(s)");
+}
+
+#[test]
+fn finalize_at_terminal_bottom_scrolls_for_the_fresh_line() {
+    // Region bottom flush with the terminal bottom: the fresh handoff
+    // line doesn't exist yet, so finalize must scroll (LF), not clamp.
+    let mut tl = Timeline::new(10, 3);
+    let mut term = TestTerminal::new(10, 3);
+
+    term.feed(&tl.present(&text("> ")));
+    term.feed(&tl.push(text("block 0")));
+    term.feed(&tl.push(text("block 1")));
+    term.feed(&tl.present(&text("> ")));
+    term.feed(&tl.finalize());
+
+    // "block 0" scrolled away to make room for the handoff line.
+    assert_eq!(term.viewport_lines()[0], "block 1");
+    assert_eq!(term.viewport_lines()[1], ">");
+    assert_eq!(term.viewport_lines()[2], "");
+    assert_eq!(term.cursor(), (2, 0));
+    assert!(term.scrollback_lines().contains(&"block 0".to_string()));
+
+    term.feed(b"$ prompt");
+    assert_eq!(term.viewport_lines()[2], "$ prompt");
+}
+
 /// The streaming-agent seal shape with a turn taller than the terminal:
 /// the tail grows past the screen (rows burst-stream into scrollback),
 /// then the same content is pushed as a block when the turn completes.
