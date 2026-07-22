@@ -107,12 +107,12 @@ started. That's the entire idea.
 
 ## Where each piece is explained
 
-- `ctx.push` and the block lifecycle — [the timeline](../guide/the-timeline.md)
+- `ctx.push` and the block lifecycle — [the timeline](../../guide/the-timeline/)
 - `tail`, `col`, `text`, and writing your own elements —
-  [elements and layout](../guide/elements.md)
-- `keymap`, dispatch order, and focus — [input](../guide/input.md)
+  [elements and layout](../../guide/elements/)
+- `keymap`, dispatch order, and focus — [input](../../guide/input/)
 - Streaming, background work, and cancellation (this example is entirely
-  synchronous; most real apps aren't) — [async](../guide/async.md)
+  synchronous; most real apps aren't) — [async](../../guide/async/)
 - Real input editing: this example hand-rolls character handling to stay
-  small; use the built-in [`text_area`](../reference/widgets.md) (or wrap
-  [tui-textarea](../guide/components.md)) in real apps.
+  small; use the built-in [`text_area`](../../reference/widgets/) (or wrap
+  [tui-textarea](../../guide/components/)) in real apps.

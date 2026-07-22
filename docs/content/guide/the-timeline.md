@@ -56,7 +56,7 @@ a millisecond a frame; the cost scales linearly from there. The design
 consequence: **push content as soon as it's final**. A chat app pushes each
 turn as it completes rather than accumulating the conversation in the tail;
 an app streaming something enormous should seal finished portions at safe
-boundaries. See [performance](performance.md) for measurements.
+boundaries. See [performance](../performance/) for measurements.
 
 One hazard to know if you keep your own index into data you're
 progressively pushing (a "frontier"): if the underlying data can shrink —

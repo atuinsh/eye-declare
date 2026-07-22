@@ -94,7 +94,7 @@ streams yourself.
 The synchronous `run(app)` drives keyboard-only apps with no executor; it
 rejects apps that spawn or subscribe, with an error saying to use the
 tokio driver. Custom drivers build on `Runtime` — see
-[testing](testing.md), which uses the same surface.
+[testing](../testing/), which uses the same surface.
 
 ## Startup work
 

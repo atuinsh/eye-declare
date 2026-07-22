@@ -100,7 +100,7 @@ composition is enum-wrapping you can read.
 value — store it in your model directly and feed it events in `update`.
 The view side is a small `Element` adapter; if the widget measures through
 `&mut self`, a `RefCell` bridges the gap (interior mutability for a cache
-is fine — see [elements](elements.md)):
+is fine — see [elements](../elements/)):
 
 ```rust
 struct Editor<'a>(&'a RefCell<TextArea<'static>>);

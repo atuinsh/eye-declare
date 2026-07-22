@@ -17,7 +17,7 @@ view-state sync, commit detection by key parsing — all deleted outright.)
 
 0.5 modeled a component tree and bolted the timeline on (`freeze`,
 `on_commit`, key-based commit detection). 0.6 inverts that:
-[the timeline is the model](../guide/the-timeline.md), and committed
+[the timeline is the model](../../guide/the-timeline/), and committed
 output is an effect you emit rather than a lifecycle the framework
 detects. Most 0.5 machinery has no equivalent because the design makes it
 unnecessary, not because it was dropped.
@@ -27,12 +27,12 @@ unnecessary, not because it was dropped.
 | 0.5 | 0.6 |
 |---|---|
 | `Application::builder().state(…).view(f)` | `impl App` — the struct is the state, `tail` is the view of the live region |
-| `element!` macro | fluent builders (`col()`, `row()`, `.when(…)`) — [elements](../guide/elements.md) |
-| `#[component]`, props, `Hooks` | plain functions and sub-model structs — [components](../guide/components.md) |
+| `element!` macro | fluent builders (`col()`, `row()`, `.when(…)`) — [elements](../../guide/elements/) |
+| `#[component]`, props, `Hooks` | plain functions and sub-model structs — [components](../../guide/components/) |
 | `Tracked<T>` / dirty detection | gone; the tail re-renders every frame |
 | keys (`key: "turn-3"`), reconciliation | gone; nothing is matched across frames |
 | `on_commit` callbacks | `ctx.push` — you decide what's committed, when |
-| `use_event` / capture & bubble phases | `Keymap` dispatch — [input](../guide/input.md) |
+| `use_event` / capture & bubble phases | `Keymap` dispatch — [input](../../guide/input/) |
 | `use_focusable` / `use_autofocus` | `FocusHandle` values in your model |
 | `Handle` + cross-thread `update(…)` | messages: `ctx.spawn` streams feed `update` |
 | `use_interval` / lifecycle hooks | `subscriptions()` / `App::init` |
