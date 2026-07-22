@@ -1,9 +1,8 @@
 //! The core `Element` trait and universal combinators.
 //!
-//! Elements are `Msg`-free (bake-off O7): they describe structure and
-//! pixels. Message emission lives in the keymap layer, so display code
-//! never names the app's message type and none of the spike's
-//! `Msg`-inference workarounds are needed.
+//! Elements are `Msg`-free: they describe structure and pixels. Message
+//! emission lives in the keymap layer, so display code never names the
+//! app's message type.
 
 use std::time::Duration;
 
@@ -41,9 +40,9 @@ pub trait Element {
 /// A boxed, type-erased element. Heterogeneous match arms converge on this
 /// via [`ElementExt::any`].
 ///
-/// Carries a lifetime so views can borrow the app model (bake-off rule 3):
-/// the tail is built, rendered, and dropped within one frame, so model
-/// borrows are naturally scoped. Fully-owned trees are `AnyElement<'static>`.
+/// Carries a lifetime so views can borrow the app model: the tail is
+/// built, rendered, and dropped within one frame, so model borrows are
+/// naturally scoped. Fully-owned trees are `AnyElement<'static>`.
 pub type AnyElement<'a> = Box<dyn Element + 'a>;
 
 impl Element for Box<dyn Element + '_> {

@@ -1,19 +1,19 @@
 //! Inline terminal UIs: timeline-first, Elm-shaped, built on Ratatui.
 //!
-//! Built on `eye_declare_engine`; designed in `.planning/REDESIGN.md` and
-//! validated by the `spike` crate's bake-off and a production port. Core
-//! commitments:
+//! Built on `eye_declare_engine`. Core commitments:
 //!
 //! - **Committed output is an effect; the live tail is a view.** Blocks are
 //!   pushed once from `update` and flow into scrollback; only the small
 //!   tail re-renders, every frame, with no dirty tracking.
-//! - **Strict-Elm state** (bake-off O1): widget state lives in the app
-//!   model as plain values; views borrow it.
-//! - **`Msg`-free elements** (bake-off O7): elements describe structure and
-//!   pixels only. All message emission happens in the keymap layer, so the
-//!   element tree carries no message type parameter.
+//! - **Strict-Elm state:** widget state lives in the app model as plain
+//!   values; views borrow it.
+//! - **`Msg`-free elements:** elements describe structure and pixels only.
+//!   All message emission happens in the keymap layer, so the element tree
+//!   carries no message type parameter.
 //! - **Honest measurement:** `Element::height(width)` is required, exact,
 //!   and cheap. No probe rendering.
+//!
+//! For more information and examples, check out the [eye-declare book](https://eye-declare.rs).
 
 pub mod app;
 #[cfg(feature = "tokio")]

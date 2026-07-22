@@ -1,4 +1,4 @@
-//! Focus as data (GPUI's `FocusHandle` pattern, per the bake-off).
+//! Focus as data (GPUI's `FocusHandle` pattern).
 //!
 //! The app model owns a [`Focus`] system and creates [`FocusHandle`]s from
 //! it. All handles from one system share a single "currently focused" cell,

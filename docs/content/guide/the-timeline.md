@@ -14,7 +14,7 @@ Every eye-declare app manages two kinds of output:
 - **The live tail** — everything below the last committed block, described
   by `tail(&self)` and replaced wholesale every frame.
 
-## Push is `println!` for elements
+## Push is println! for elements
 
 ```rust
 ctx.push(markdown(&finished_turn));

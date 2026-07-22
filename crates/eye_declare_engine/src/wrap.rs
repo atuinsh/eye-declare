@@ -6,9 +6,9 @@ use ratatui_widgets::paragraph::{Paragraph, Wrap};
 /// Below this width the word wrapper is unsafe: at width 2 a multi-column
 /// grapheme mid-word (plain CJK does it — `"a佉b"`) makes ratatui's
 /// `WordWrapper` emit a line wider than the limit, and `Paragraph::render`
-/// then writes past the buffer edge (upstream bug, fuzz-found; minimal
-/// repros in `.planning/FUZZING.md`). Under this width both measuring and
-/// rendering fall back to truncation, which is panic-free at any width.
+/// then writes past the buffer edge (upstream bug, found by fuzzing).
+/// Under this width both measuring and rendering fall back to truncation,
+/// which is panic-free at any width.
 const MIN_WRAP_WIDTH: u16 = 3;
 
 /// Compute how many terminal rows `text` occupies at `width` with word wrapping.

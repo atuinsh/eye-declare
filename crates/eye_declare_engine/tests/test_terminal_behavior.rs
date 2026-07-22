@@ -1,8 +1,7 @@
 //! The emulator is the oracle for every headless test in the workspace,
 //! so it gets direct behavior tests of its own (mutation testing showed
-//! several of its CSI arms could be deleted unnoticed —
-//! `.planning/MUTATION.md`). Each test feeds raw escape bytes and asserts
-//! on screen and cursor state.
+//! several of its CSI arms could be deleted unnoticed). Each test feeds
+//! raw escape bytes and asserts on screen and cursor state.
 
 use eye_declare_engine::test_terminal::TestTerminal;
 

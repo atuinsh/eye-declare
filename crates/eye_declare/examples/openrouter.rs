@@ -75,6 +75,7 @@ struct Chat {
     request: Option<Task>,
     started: Option<Instant>,
 
+    exiting: bool,
     input: TextAreaState,
     input_focus: FocusHandle,
     error: Option<String>,
@@ -92,6 +93,7 @@ impl Chat {
             streaming: String::new(),
             request: None,
             started: None,
+            exiting: false,
             input: TextAreaState::new(),
             input_focus,
             error: None,
@@ -189,6 +191,7 @@ impl App for Chat {
                     // partial reply is still worth keeping.
                     self.finish_reply(Some("interrupted"), ctx);
                 } else {
+                    self.exiting = true;
                     ctx.exit(());
                 }
             }
@@ -230,24 +233,26 @@ impl App for Chat {
                         .pad_top(1),
                 )
             })
-            .child(
-                panel(
-                    text_area(&self.input)
-                        .placeholder("Ask anything…")
-                        .track_focus(&self.input_focus)
-                        .max_height(6),
+            .when(!self.exiting, |c| {
+                c.child(
+                    panel(
+                        text_area(&self.input)
+                            .placeholder("Ask anything…")
+                            .track_focus(&self.input_focus)
+                            .max_height(6),
+                    )
+                    .title("You")
+                    .title_right(&self.model)
+                    .footer(if self.busy() {
+                        "[Esc] Cancel"
+                    } else {
+                        "[Enter] Send  [Shift+Enter] Newline  [Esc] Quit"
+                    })
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .pad_x(1)
+                    .pad_top(1),
                 )
-                .title("You")
-                .title_right(&self.model)
-                .footer(if self.busy() {
-                    "[Esc] Cancel"
-                } else {
-                    "[Enter] Send  [Shift+Enter] Newline  [Esc] Quit"
-                })
-                .border_style(Style::default().fg(Color::DarkGray))
-                .pad_x(1)
-                .pad_top(1),
-            )
+            })
     }
 
     fn keymap(&self) -> Keymap<Msg> {
