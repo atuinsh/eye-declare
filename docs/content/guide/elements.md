@@ -44,14 +44,14 @@ pub trait Element {
 
 Two things are deliberately absent. There's no message type parameter —
 elements describe pixels, and all message emission lives in the
-[keymap](input.md). And there's no probe-render escape hatch: `height` is
+[keymap](../input/). And there's no probe-render escape hatch: `height` is
 part of the contract, exact, called before `render`. For wrapped text the
 `wrap` helpers in the engine make it a one-liner.
 
 Note that `animated()` covers *view-only* time dependence — pixels that
 change while the model doesn't, like a spinner glyph or an elapsed-seconds
 label. Time that should change your model goes through
-[subscriptions](async.md) as messages. Animation ticks are not messages.
+[subscriptions](../async/) as messages. Animation ticks are not messages.
 
 ## Heterogeneous children: `AnyElement`
 
@@ -120,4 +120,4 @@ Any Ratatui `Widget` adapts in a few lines: `height` from whatever
 measurement the widget offers, `render` delegating to its `Widget` impl.
 Widgets that measure through `&mut self` (tui-textarea's `measure`, for
 example) sit behind the same `RefCell` pattern. See
-[components](components.md) for a worked example.
+[components](../components/) for a worked example.

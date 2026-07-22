@@ -65,6 +65,6 @@ application, use [Ratatui](https://ratatui.rs) directly — eye-declare is
 built on Ratatui's primitives and hands you its `Buffer` and `Style` types,
 but it deliberately does not do full-screen layout.
 
-Continue to [installation](installation.md), or read
-[the timeline](../guide/the-timeline.md) for the semantics that follow from
+Continue to [installation](../installation/), or read
+[the timeline](../../guide/the-timeline/) for the semantics that follow from
 the design.

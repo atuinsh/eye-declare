@@ -69,7 +69,7 @@ to your keymap.
 `TextAreaState.handle` covers ordinary editing. If you want emacs
 bindings, undo, and a kill ring, wrap
 [tui-textarea](https://crates.io/crates/tui-textarea) instead — the
-[components chapter](../guide/components.md) shows the adapter.
+[components chapter](../../guide/components/) shows the adapter.
 
 ## Viewport
 

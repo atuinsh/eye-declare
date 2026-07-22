@@ -28,7 +28,7 @@ not one per chunk.
 
 **Per-frame cost is O(tail content).** The frame costs above scale
 linearly with how much lives in the tail. The fix is architectural, not
-micro: [push content when it's final](the-timeline.md). An app that seals
+micro: [push content when it's final](../the-timeline/). An app that seals
 each turn as it completes has a tail that stays small no matter how long
 the session runs. At ordinary sizes the cost is negligible — 10KB of live
 markdown at animation cadence is roughly 1% of a core — so this matters

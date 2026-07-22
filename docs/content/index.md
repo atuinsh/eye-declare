@@ -33,8 +33,8 @@ fn tail(&self) -> impl Element + '_ {
 }
 ```
 
-Start with the [introduction](getting-started/introduction.md) for the idea
-behind the design, or jump to the [quick start](getting-started/quick-start.md)
+Start with the [introduction](/getting-started/introduction/) for the idea
+behind the design, or jump to the [quick start](/getting-started/quick-start/)
 to build a working app in about sixty lines. For a complete real-world
 program, see the [OpenRouter chat example](https://github.com/atuinsh/eye-declare/blob/main/crates/eye_declare/examples/openrouter.rs)
 — a streaming AI chat TUI in one commented file.

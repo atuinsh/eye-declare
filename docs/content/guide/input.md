@@ -76,7 +76,7 @@ let child = SelectState::keymap().map(Msg::Select);
 km = km.on(key(KeyCode::Enter), Msg::Confirm).merge(child);
 ```
 
-See [components](components.md) for the full sub-model pattern.
+See [components](../components/) for the full sub-model pattern.
 
 ## Keyboard protocol
 

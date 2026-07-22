@@ -60,7 +60,7 @@ let effects = rt.take_effects();                 // spawned work, for the driver
 let interval = rt.animation_interval();          // Some(_) while tail animates
 ```
 
-This is the surface for [headless testing](../guide/testing.md) and for
+This is the surface for [headless testing](../../guide/testing/) and for
 custom drivers (another executor, a remote terminal, an event-sourced
 replay). A driver's obligations: write every byte returned, in order;
 execute or reject effects; call `present` on `animation_interval`'s
