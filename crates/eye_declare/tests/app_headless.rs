@@ -146,6 +146,121 @@ fn echo_session_end_to_end() {
     }
     assert_eq!(term.viewport_lines()[0], "* hell");
     assert_eq!(term.viewport_lines()[1], "* again");
+
+    // Exit parks the cursor on a fresh line below the still-visible tail,
+    // so whatever main() prints after run() returns doesn't land on top
+    // of it.
+    assert_eq!(term.viewport_lines()[2], ">");
+    assert_eq!(term.viewport_lines()[3], "(2 sent)");
+    assert_eq!(term.cursor(), (4, 0));
+    term.feed(b"echoed 2 line(s)\r\n");
+    assert_eq!(term.viewport_lines()[3], "(2 sent)");
+    assert_eq!(term.viewport_lines()[4], "echoed 2 line(s)");
+}
+
+#[test]
+fn init_exit_parks_cursor_below_content() {
+    // An exit requested from App::init bypasses the message loop, so the
+    // shell handoff must come from startup() itself.
+    struct PrintAndQuit;
+
+    impl App for PrintAndQuit {
+        type Msg = ();
+        type Output = ();
+
+        fn init(&mut self, ctx: &mut Ctx<'_, Self>) {
+            ctx.push(text("one-shot output"));
+            ctx.exit(());
+        }
+
+        fn update(&mut self, _msg: (), _ctx: &mut Ctx<'_, Self>) {}
+
+        fn tail(&self) -> impl Element + '_ {
+            text("tail line")
+        }
+
+        fn keymap(&self) -> Keymap<()> {
+            keymap()
+        }
+    }
+
+    let mut rt = Runtime::new(PrintAndQuit, 20, 24);
+    let mut term = TestTerminal::new(20, 24);
+
+    let (bytes, exit) = rt.startup();
+    term.feed(&bytes);
+    assert!(exit.is_some());
+
+    assert_eq!(term.viewport_lines()[0], "one-shot output");
+    assert_eq!(term.viewport_lines()[1], "tail line");
+    assert_eq!(term.cursor(), (2, 0));
+    term.feed(b"$ prompt");
+    assert_eq!(term.viewport_lines()[2], "$ prompt");
+}
+
+#[test]
+fn tail_hidden_before_deferred_exit_leaves_no_gap() {
+    // The Atuin AI exit shape: one update hides the tail (the input box
+    // disappears in its own frame), a later message actually exits. The
+    // vacated rows must be reclaimed with no blank line left between the
+    // committed content and the shell prompt.
+    struct HideThenQuit {
+        exiting: bool,
+    }
+
+    #[derive(Clone)]
+    enum HMsg {
+        Commit,
+        Hide,
+        Quit,
+    }
+
+    impl App for HideThenQuit {
+        type Msg = HMsg;
+        type Output = ();
+
+        fn update(&mut self, msg: HMsg, ctx: &mut Ctx<'_, Self>) {
+            match msg {
+                HMsg::Commit => ctx.push(text("committed line")),
+                HMsg::Hide => self.exiting = true,
+                HMsg::Quit => ctx.exit(()),
+            }
+        }
+
+        fn tail(&self) -> impl Element + '_ {
+            if self.exiting {
+                col()
+            } else {
+                col().child(text("| input box |")).child(text("footer"))
+            }
+        }
+
+        fn keymap(&self) -> Keymap<HMsg> {
+            keymap()
+        }
+    }
+
+    let mut rt = Runtime::new(HideThenQuit { exiting: false }, 20, 24);
+    let mut term = TestTerminal::new(20, 24);
+
+    term.feed(&rt.present());
+    let (bytes, _) = rt.process(HMsg::Commit);
+    term.feed(&bytes);
+    assert_eq!(term.viewport_lines()[1], "| input box |");
+    assert_eq!(term.viewport_lines()[2], "footer");
+
+    let (bytes, exit) = rt.process(HMsg::Hide);
+    term.feed(&bytes);
+    assert!(exit.is_none());
+    let (bytes, exit) = rt.process(HMsg::Quit);
+    term.feed(&bytes);
+    assert!(exit.is_some());
+
+    assert_eq!(term.viewport_lines()[0], "committed line");
+    assert_eq!(term.viewport_lines()[1], "");
+    assert_eq!(term.cursor(), (1, 0));
+    term.feed(b"$ prompt");
+    assert_eq!(term.viewport_lines()[1], "$ prompt");
 }
 
 #[test]

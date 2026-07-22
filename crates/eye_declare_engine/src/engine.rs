@@ -324,25 +324,24 @@ impl Engine {
         output
     }
 
-    /// Reclaim trailing blank rows after the frame has shrunk.
+    /// Park the cursor for shell handoff: column 0 on the row after the
+    /// last content row, trailing blank rows erased.
     ///
-    /// Call after a final [`present`](Engine::present) when content has
-    /// been removed (e.g., clearing a text input before exit). Moves the
-    /// cursor to the last row of actual content, erases everything below,
-    /// and adjusts tracking so the shell prompt appears immediately after
-    /// the content.
-    ///
-    /// Returns an empty Vec if there are no trailing blank rows to reclaim.
+    /// Call after a final [`present`](Engine::present). When the tail
+    /// shrank before exit (e.g., an input box cleared) the vacated rows
+    /// are reclaimed so the shell prompt appears immediately after the
+    /// content; when the tail still has content, a fresh line is opened
+    /// below it so whatever the process prints next (`println!`, the
+    /// shell prompt) never lands on top of the tail. Idempotent.
     pub fn finalize(&mut self) -> Vec<u8> {
+        if self.emitted_rows == 0 {
+            return Vec::new();
+        }
         let current_height = self
             .prev_frame
             .as_ref()
             .map(|f| f.area().height)
             .unwrap_or(0);
-
-        if current_height >= self.emitted_rows || self.emitted_rows == 0 {
-            return Vec::new();
-        }
 
         // Respect the scrollback boundary: rows above `scrolled_past` are
         // in terminal scrollback and unreachable by cursor movement.  If we
@@ -351,33 +350,47 @@ impl Engine {
         let scrolled_past = self.emitted_rows.saturating_sub(self.terminal_height);
         let target_row = current_height.max(scrolled_past);
 
-        if target_row >= self.emitted_rows {
+        let mut output = Vec::new();
+
+        if target_row < self.emitted_rows {
+            // Trailing blank rows below the content: erasing them leaves
+            // the cursor exactly at the handoff position.
+            //
+            // Use CR first to clear any pending-wrap state, then CPL
+            // (Cursor Previous Line) which moves up N lines and to
+            // column 0 atomically — more reliable than CUU + CR for
+            // terminals with edge-case wrap behavior.
+            output.extend_from_slice(b"\r");
+            if self.cursor.row > target_row {
+                let up = self.cursor.row - target_row;
+                output.extend_from_slice(format!("\x1b[{}F", up).as_bytes());
+            } else if self.cursor.row < target_row {
+                let down = target_row - self.cursor.row;
+                output.extend_from_slice(format!("\x1b[{}E", down).as_bytes());
+            }
+
+            // Erase from cursor to end of screen
+            output.extend_from_slice(b"\x1b[J");
+
+            self.emitted_rows = target_row;
+        } else if self.cursor.row < self.emitted_rows {
+            // Content fills the region: open a fresh line below it. LF —
+            // not CNL, which clamps instead of scrolling at the bottom
+            // margin, where the new line may not physically exist yet.
+            output.extend_from_slice(b"\r");
+            let bottom = self.emitted_rows - 1;
+            if self.cursor.row < bottom {
+                let down = bottom - self.cursor.row;
+                output.extend_from_slice(format!("\x1b[{}E", down).as_bytes());
+            }
+            output.extend_from_slice(b"\n");
+        } else {
+            // Already parked below the content (a repeated finalize).
             return Vec::new();
         }
 
-        let mut output = Vec::new();
-
-        // Position cursor at the first erasable blank row.
-        // Use CR first to clear any pending-wrap state, then CPL
-        // (Cursor Previous Line) which moves up N lines and to
-        // column 0 atomically — more reliable than CUU + CR for
-        // terminals with edge-case wrap behavior.
-        output.extend_from_slice(b"\r");
-        if self.cursor.row > target_row {
-            let up = self.cursor.row - target_row;
-            output.extend_from_slice(format!("\x1b[{}F", up).as_bytes());
-        } else if self.cursor.row < target_row {
-            let down = target_row - self.cursor.row;
-            output.extend_from_slice(format!("\x1b[{}E", down).as_bytes());
-        }
-
-        // Erase from cursor to end of screen
-        output.extend_from_slice(b"\x1b[J");
-
-        self.cursor.row = target_row;
+        self.cursor.row = self.emitted_rows;
         self.cursor.col = 0;
-        self.emitted_rows = target_row;
-
         output
     }
 
