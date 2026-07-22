@@ -2,7 +2,7 @@
 name = "eye_declare"
 description = "Inline terminal UIs for Rust: timeline-first, Elm-shaped, built on Ratatui"
 repository = "https://github.com/atuinsh/eye-declare"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 license = "MIT"
 keywords = ["tui", "terminal", "inline", "cli", "elm"]
