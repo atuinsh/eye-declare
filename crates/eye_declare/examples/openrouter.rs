@@ -208,7 +208,7 @@ impl App for Chat {
                 c.child(
                     col()
                         .child(assistant_label())
-                        .child(markdown(self.streaming.clone()).pad_left(2)),
+                        .child(markdown(self.streaming.clone()).streaming(true).pad_left(2)),
                 )
             })
             .when(waiting, |c| {
