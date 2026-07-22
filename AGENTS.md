@@ -22,8 +22,6 @@ crates/
   eye_declare_engine/  Terminal-sync engine: frame diffing, escape generation,
                        scrollback streaming, cursor discipline; VTE TestTerminal
                        behind the `test-util` feature (no crossterm dependency)
-  spike/               Historical: the Phase-1 API bake-off (compile-only).
-                       Verdicts in crates/spike/FINDINGS.md. Do not extend.
 ```
 
 ## Build & Commands

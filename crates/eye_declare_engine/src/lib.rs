@@ -1,18 +1,15 @@
-//! The inline terminal rendering engine extracted from `eye_declare`
-//! (redesign Phase 2 — see `.planning/REDESIGN.md` at the repo root).
+//! The inline terminal rendering engine behind `eye_declare`.
 //!
 //! Contract: frames in, terminal-synced scrollback out. This crate knows
 //! nothing about components, element trees, or reconciliation — it speaks
 //! `ratatui` `Buffer`s and emits ANSI escape bytes.
 //!
-//! Extraction in progress: `frame` (buffer diffing), `escape` (ANSI
-//! generation, relative-cursor discipline, synchronized output), and `wrap`
-//! (word-wrap measurement) have moved; the terminal-sync state machine from
-//! `inline.rs` (row accounting, scrollback streaming, resize/finalize) is
-//! next, along with the VTE test terminal.
-//!
-//! `publish = false` until the extraction completes and the crate is named
-//! for real (spec question O4).
+//! Modules: `engine` (the terminal-sync state machine: row accounting,
+//! scrollback streaming, resize/finalize), `frame` (buffer diffing),
+//! `escape` (ANSI generation, relative-cursor discipline, synchronized
+//! output), `wrap` (word-wrap measurement), and — behind the `test-util`
+//! feature — `test_terminal`, a VTE-based terminal emulator for headless
+//! tests.
 
 pub mod engine;
 pub mod escape;

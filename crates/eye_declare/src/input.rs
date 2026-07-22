@@ -2,7 +2,7 @@
 //! rebuilt from the model each update so bindings can be conditional on
 //! app state.
 //!
-//! Dispatch order (bake-off O2, first match in declaration order wins):
+//! Dispatch order (first match in declaration order wins):
 //! 1. [`on_override`](Keymap::on_override) bindings — Ctrl+C-tier chords
 //!    that fire regardless of focus
 //! 2. [`in_scope`](Keymap::in_scope) bindings for the focused handle
@@ -73,8 +73,8 @@ enum Scope {
 type FallthroughFn<Msg> = Box<dyn Fn(InputEvent) -> Msg + Send>;
 
 /// Key → message bindings. Values, not callbacks: rebuild from the model
-/// each update (see the conditional Tab bindings in the spike's Port 3A —
-/// this is what makes key-policy conflicts impossible by construction).
+/// each update, so bindings can be conditional on app state and key-policy
+/// conflicts are impossible by construction.
 pub struct Keymap<Msg> {
     bindings: Vec<(Scope, Key, Msg)>,
     fallthrough: Vec<(FocusHandle, FallthroughFn<Msg>)>,

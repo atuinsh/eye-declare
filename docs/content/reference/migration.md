@@ -8,10 +8,9 @@ description: From the component tree to the timeline
 0.6.0 is a redesign, not an increment. The scrollback engine — the part of
 0.5 that was genuinely hard to get right — carries over intact underneath,
 but the component model above it is replaced. There is no mechanical
-migration; expect to restructure, and expect the result to be smaller.
-(The largest 0.5 application shrank by about a sixth while gaining a test
-suite when ported; its adapter layers — an event-channel bridge, a
-view-state sync, commit detection by key parsing — all deleted outright.)
+migration; expect to restructure, and expect the result to be smaller —
+adapter layers like event-channel bridges, view-state sync, and commit
+detection by key parsing tend to delete outright.
 
 ## The conceptual change
 

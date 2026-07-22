@@ -1,7 +1,7 @@
-//! Editable multi-line text: state as a plain model value (strict Elm,
-//! bake-off O1), view as a borrowing element.
+//! Editable multi-line text: state as a plain model value (strict Elm),
+//! view as a borrowing element.
 //!
-//! Division of labor, as validated by the spike's Port 3A:
+//! Division of labor:
 //!
 //! - [`TextAreaState`] owns content + cursor and applies *ordinary editing*
 //!   ([`handle`](TextAreaState::handle)): characters, backspace/delete,

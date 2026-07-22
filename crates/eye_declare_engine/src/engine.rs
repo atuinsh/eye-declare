@@ -1,7 +1,5 @@
 //! The terminal-sync state machine: owns cursor tracking, row accounting,
-//! and the scrollback boundary. Extracted verbatim from `eye_declare`'s
-//! `InlineRenderer` (Phase 2, step 2) — that type now delegates all
-//! terminal mechanics here and keeps only the component-tree concerns.
+//! and the scrollback boundary.
 
 use ratatui_core::buffer::Buffer;
 

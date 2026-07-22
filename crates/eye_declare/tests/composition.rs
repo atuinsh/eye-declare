@@ -1,8 +1,8 @@
-//! Component composition, the strict-Elm way (the spike's Port 3A pattern
-//! made real): a reusable `PromptBox` sub-model with its own Msg, update,
-//! keymap, and view — embedded in a parent app by enum wrapping. The
-//! parent claims the child's `Submit` (app policy) and delegates the rest.
-//! No context system, no event phases, no OutMsg machinery.
+//! Component composition, the strict-Elm way: a reusable `PromptBox`
+//! sub-model with its own Msg, update, keymap, and view — embedded in a
+//! parent app by enum wrapping. The parent claims the child's `Submit`
+//! (app policy) and delegates the rest. No context system, no event
+//! phases, no OutMsg machinery.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use eye_declare::{

@@ -122,8 +122,7 @@ performance. Migrating from 0.5? There's a
 ## Status
 
 0.6.0 is a ground-up redesign of the library around the timeline
-architecture, validated by porting a production AI agent TUI onto it before
-release. The 0.5.x component-model API is frozen and will not receive
+architecture. The 0.5.x component-model API is frozen and will not receive
 further changes. Expect the 0.6 API to settle toward 1.0 as it accumulates
 mileage.
 
