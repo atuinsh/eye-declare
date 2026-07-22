@@ -1,0 +1,7 @@
+# cargo-mutants configuration (https://mutants.rs)
+#
+# The engine crate is covered almost entirely by eye_declare's integration
+# tests (headless Runtime + VTE TestTerminal), so every mutant must face the
+# whole workspace suite. Without this, `cargo mutants -p eye_declare_engine`
+# runs only the engine's own unit tests and reports ~3x the real miss rate.
+test_workspace = true
