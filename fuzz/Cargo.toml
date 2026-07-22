@@ -58,5 +58,3 @@ overflow-checks = true
 [dependencies.unicode-segmentation]
 version = "1"
 
-[dependencies.unicode-width]
-version = "0.2"

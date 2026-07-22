@@ -22,7 +22,6 @@ use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::{Alignment, Rect};
 use ratatui_core::style::{Color, Modifier, Style};
 use ratatui_core::text::{Line, Span, Text as RText};
-use ratatui_core::widgets::Widget;
 
 use crate::element::Element;
 
@@ -168,8 +167,13 @@ impl Element for Markdown {
                     (Block::Text(text), BlockLayout::Text { rows }) => {
                         let rect = Rect::new(area.x, y, area.width, *rows).intersection(area);
                         if rect.height > 0 {
-                            eye_declare_engine::wrap::wrapping_paragraph(borrow_text(text))
-                                .render(rect, buf);
+                            eye_declare_engine::wrap::render_wrapped(
+                                borrow_text(text),
+                                Alignment::Left,
+                                0,
+                                rect,
+                                buf,
+                            );
                         }
                         y = y.saturating_add(*rows);
                     }
@@ -202,22 +206,31 @@ enum Block {
     Table(Table),
 }
 
-/// Make text safe to become cell symbols: tabs expand to spaces, other
-/// control characters become U+FFFD. Raw controls in a cell are hazardous
-/// twice over — an ESC would splice into the terminal's escape stream when
-/// the row is emitted, and zero-width controls drive ratatui's word
-/// wrapper out of bounds (found by fuzzing: `"\0[佉x"` at width 2 panics
-/// inside `Paragraph::render`).
+/// Make text safe to become cell symbols: tabs expand to spaces; control
+/// characters and zero-width graphemes become U+FFFD. Raw controls in a
+/// cell are hazardous twice over — an ESC would splice into the
+/// terminal's escape stream when the row is emitted, and anything the
+/// width tables call zero columns (NUL, Cf format chars like U+0604, a
+/// lone combining mark) drives ratatui's word wrapper out of bounds
+/// (found by fuzzing: `"\0[佉x"` and `"x\u{604}<!"` at width 2 panic
+/// inside `Paragraph::render`). Combining sequences attached to a base
+/// (`e\u{301}`) have width and pass through untouched.
 fn sanitize(s: &str) -> std::borrow::Cow<'_, str> {
-    if !s.chars().any(char::is_control) {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
+    let clean = !s.chars().any(char::is_control) && s.graphemes(true).all(|g| g.width() > 0);
+    if clean {
         return std::borrow::Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '\t' => out.push_str("    "),
-            c if c.is_control() => out.push('\u{FFFD}'),
-            c => out.push(c),
+    for g in s.graphemes(true) {
+        if g == "\t" {
+            out.push_str("    ");
+        } else if g.chars().any(char::is_control) || g.width() == 0 {
+            out.push('\u{FFFD}');
+        } else {
+            out.push_str(g);
         }
     }
     std::borrow::Cow::Owned(out)
@@ -486,9 +499,13 @@ fn draw_cells(
         if rect.width == 0 || rect.height == 0 {
             continue;
         }
-        eye_declare_engine::wrap::wrapping_paragraph(RText::from(borrow_line(cell)))
-            .alignment(table.alignments.get(i).copied().unwrap_or(Alignment::Left))
-            .render(rect, buf);
+        eye_declare_engine::wrap::render_wrapped(
+            RText::from(borrow_line(cell)),
+            table.alignments.get(i).copied().unwrap_or(Alignment::Left),
+            0,
+            rect,
+            buf,
+        );
     }
     y.saturating_add(height)
 }
@@ -1228,12 +1245,17 @@ mod tests {
     /// instance of that shape from parse output.
     #[test]
     fn fragmented_spans_with_wide_chars_render_safely() {
-        let el = markdown("\u{0}[\u{4f49}&");
-        for width in 1..8 {
-            let height = Element::height(&el, width);
-            let area = Rect::new(0, 0, width, height);
-            let mut buf = Buffer::empty(area);
-            el.render(area, &mut buf); // must not panic
+        // "\u{604}" (a Cf format char) is the zero-width variant of the
+        // same trigger, caught by a later fuzz run: not a control char,
+        // but zero columns wide, so it must also never reach a span.
+        for source in ["\u{0}[\u{4f49}&", "x\u{604}<!"] {
+            let el = markdown(source);
+            for width in 1..8 {
+                let height = Element::height(&el, width);
+                let area = Rect::new(0, 0, width, height);
+                let mut buf = Buffer::empty(area);
+                el.render(area, &mut buf); // must not panic
+            }
         }
     }
 

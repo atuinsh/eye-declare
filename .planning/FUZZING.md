@@ -101,6 +101,23 @@ arbitrary geometry and op interleavings that example-based tests miss.
   which still affects the equal-dimensions fast path — see below.
   Regression test: `engine_compose::wide_glyph_survives_tail_height_change`.
 
+- **Word wrapper out of bounds at width 2 with plain CJK** (guarded,
+  found re-fuzzing after the GFM-table merge): ratatui's `WordWrapper`
+  emits a line wider than the limit when a multi-column grapheme sits
+  mid-word at width 2 — `"a佉b"` does it, as does a Cf prepend cluster
+  (`"x\u{604}<!"`, where U+0604 merges with the *following* char into a
+  width-2 cluster). `Paragraph::render` then writes past the buffer
+  edge. Distinct from the multi-span trigger above and not fixable by
+  span merging; table cells make width-2 wrap regions realistic (a
+  four-column table in a 20-col terminal). `wrap.rs` now has one render
+  path, `render_wrapped`, that falls back to truncation below
+  `MIN_WRAP_WIDTH = 3`, with `wrapped_line_count` measuring identically
+  so `height(width)` stays exact; all element render sites go through
+  it. This also let `markdown_element` re-enable wide glyphs in its
+  corpus. Regression tests:
+  `wrap::tests::degenerate_widths_truncate_instead_of_wrapping`,
+  `markdown::tests::fragmented_spans_with_wide_chars_render_safely`.
+
 After the fixes, the extended differential (resize + CJK) runs clean:
 ~200k executions over 5 minutes with resize hitting `reset_region` and
 `set_terminal_height` — the paths mutation testing found completely
@@ -115,8 +132,6 @@ untested now hold up under arbitrary interleavings.
   through the equal-dimensions diff fast path.
 - The engine's `commit`/`finalize` ops directly — `runtime_transcript`
   exercises them only through `Timeline`'s usage.
-- Wide glyphs in `markdown_element` (filtered out pending the upstream
-  ratatui wrapper fix above).
 - Terminal reflow on resize: the emulator clips/pads without reflowing,
   matching the engine's committed-content promise; reflowing terminals
   are out of model.
