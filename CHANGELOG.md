@@ -1,3 +1,25 @@
+## [0.6.2](https://github.com/atuinsh/eye-declare/compare/v0.6.1..v0.6.2) - 2026-07-22
+
+### ⛰️ Features
+
+- *(markdown)* Render GFM tables, with smooth streaming support ([#49](https://github.com/atuinsh/eye-declare/issues/49)) - ([7ae1c1a](https://github.com/atuinsh/eye-declare/commit/7ae1c1a075f49280c94c27386d1cc3a7332f8829))
+
+### 📚 Documentation
+
+- Add mutation testing config and findings ([#47](https://github.com/atuinsh/eye-declare/issues/47)) - ([5c41e95](https://github.com/atuinsh/eye-declare/commit/5c41e95e812dd048cdefd34902d585895658d19d))
+
+### Fuzzing
+
+- Cargo-fuzz harness, five bugs found and fixed, TestTerminal wide-glyph + resize support ([#48](https://github.com/atuinsh/eye-declare/issues/48)) - ([4f8bcec](https://github.com/atuinsh/eye-declare/commit/4f8bcecdbfe256f81b3a4f4f1ea831904fe4d301))
+## [0.6.1](https://github.com/atuinsh/eye-declare/compare/v0.5.1..v0.6.1) - 2026-07-20
+
+### ⛰️ Features
+
+- [**breaking**] Eye_declare 0.6.0 — the timeline architecture ships ([#45](https://github.com/atuinsh/eye-declare/issues/45)) - ([b00158a](https://github.com/atuinsh/eye-declare/commit/b00158aaf797aa56e87b99f2aad28aca5d06437a))
+
+### 📚 Documentation
+
+- Rewrite book and README for 0.6 ([#44](https://github.com/atuinsh/eye-declare/issues/44)) - ([980fe49](https://github.com/atuinsh/eye-declare/commit/980fe493dc92618265d6c003c69ccb4f50f36181))
 ## [0.5.1](https://github.com/atuinsh/eye-declare/compare/v0.5.0..v0.5.1) - 2026-04-24
 
 ### 🐛 Bug Fixes
