@@ -1,15 +1,10 @@
 //! The inline terminal rendering engine behind `eye_declare`.
 //!
 //! Contract: frames in, terminal-synced scrollback out. This crate knows
-//! nothing about components, element trees, or reconciliation — it speaks
-//! `ratatui` `Buffer`s and emits ANSI escape bytes.
+//! nothing about components, element trees, or reconciliation; it speaks
+//! ratatui `Buffer`s and emits ANSI escape bytes.
 //!
-//! Modules: `engine` (the terminal-sync state machine: row accounting,
-//! scrollback streaming, resize/finalize), `frame` (buffer diffing),
-//! `escape` (ANSI generation, relative-cursor discipline, synchronized
-//! output), `wrap` (word-wrap measurement), and — behind the `test-util`
-//! feature — `test_terminal`, a VTE-based terminal emulator for headless
-//! tests.
+//! For more information, see the [eye-declare documentation](https://docs.rs/eye_declare/).
 
 pub mod engine;
 pub mod escape;

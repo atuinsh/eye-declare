@@ -32,12 +32,12 @@ conveniences from the `Fluent` trait available on every builder:
 
 ```rust
 pub trait Element {
-    /// Exact height at the given width. Must be cheap and honest.
+    // Exact height at the given width. Must be cheap and honest.
     fn height(&self, width: u16) -> u16;
     fn render(&self, area: Rect, buf: &mut Buffer);
-    /// Frame interval if self-animating (Spinner returns ~80ms).
+    // Frame interval if self-animating (Spinner returns ~80ms).
     fn animated(&self) -> Option<Duration> { None }
-    /// Hardware-cursor position, if this element wants it.
+    // Hardware-cursor position, if this element wants it.
     fn cursor(&self, area: Rect) -> Option<(u16, u16)> { None }
 }
 ```
@@ -48,7 +48,7 @@ elements describe pixels, and all message emission lives in the
 part of the contract, exact, called before `render`. For wrapped text the
 `wrap` helpers in the engine make it a one-liner.
 
-Note that `animated()` covers *view-only* time dependence — pixels that
+Note that `animated()` covers _view-only_ time dependence — pixels that
 change while the model doesn't, like a spinner glyph or an elapsed-seconds
 label. Time that should change your model goes through
 [subscriptions](../async/) as messages. Animation ticks are not messages.
@@ -71,7 +71,7 @@ fn event_view(event: &UiEvent) -> AnyElement<'_> {
 ## Writing view helper functions
 
 A helper that borrows data and returns `impl Element` needs Rust's precise
-capturing syntax when it *doesn't* capture the borrow:
+capturing syntax when it _doesn't_ capture the borrow:
 
 ```rust
 // Clones what it needs: tell the compiler nothing is captured.
@@ -95,7 +95,7 @@ Implement the trait directly; it's small on purpose. Two conventions from
 the built-ins worth copying:
 
 **Same-frame caching for expensive work.** Elements are values rebuilt
-every frame, but *within* a frame, `height` runs more than once (the tail
+every frame, but _within_ a frame, `height` runs more than once (the tail
 measure, then container placement during render) and `render` follows. An
 element that parses or lays out something non-trivial should do that work
 once per lifetime with a `RefCell` cache — the built-in `markdown()` does

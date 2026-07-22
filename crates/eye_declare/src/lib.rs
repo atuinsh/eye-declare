@@ -12,6 +12,8 @@
 //!   carries no message type parameter.
 //! - **Honest measurement:** `Element::height(width)` is required, exact,
 //!   and cheap. No probe rendering.
+//!
+//! For more information and examples, check out the [eye-declare book](https://eye-declare.rs).
 
 pub mod app;
 #[cfg(feature = "tokio")]
