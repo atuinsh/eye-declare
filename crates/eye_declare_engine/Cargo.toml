@@ -17,3 +17,9 @@ vte = { version = "0.15.0", optional = true }
 [features]
 # VTE-backed TestTerminal for snapshot-testing engine output.
 test-util = ["dep:vte"]
+
+[dev-dependencies]
+# Self-dependency to switch test-util on for this crate's own tests, so
+# `cargo test --workspace` runs the TestTerminal behavior suite without
+# needing a feature flag.
+eye_declare_engine = { path = ".", features = ["test-util"] }

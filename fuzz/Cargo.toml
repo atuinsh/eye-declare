@@ -1,0 +1,60 @@
+[package]
+name = "eye_declare-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+crossterm = "0.29"
+ratatui-core = "0.1"
+
+[dependencies.eye_declare]
+path = "../crates/eye_declare"
+default-features = false
+features = ["markdown"]
+
+[dependencies.eye_declare_engine]
+path = "../crates/eye_declare_engine"
+features = ["test-util"]
+
+# Use independent workspace for fuzzers
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "runtime_transcript"
+path = "fuzz_targets/runtime_transcript.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text_area_ops"
+path = "fuzz_targets/text_area_ops.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "markdown_element"
+path = "fuzz_targets/markdown_element.rs"
+test = false
+doc = false
+bench = false
+
+# Fuzzing wants maximum bug-finding, not maximum speed: keep debug
+# assertions and overflow checks on even in the release profile cargo-fuzz
+# builds with.
+[profile.release]
+debug = 1
+debug-assertions = true
+overflow-checks = true
+
+[dependencies.unicode-segmentation]
+version = "1"
+

@@ -5,7 +5,6 @@ use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect;
 use ratatui_core::style::Style;
 use ratatui_core::text::Text as RText;
-use ratatui_core::widgets::Widget;
 
 use crate::element::Element;
 
@@ -64,9 +63,13 @@ impl Element for Viewport {
             let text = RText::from(self.lines.join("\n")).style(self.style);
             let total = eye_declare_engine::wrap::wrapped_line_count(&text, area.width);
             let scroll = total.saturating_sub(area.height);
-            eye_declare_engine::wrap::wrapping_paragraph(text)
-                .scroll((scroll, 0))
-                .render(area, buf);
+            eye_declare_engine::wrap::render_wrapped(
+                text,
+                ratatui_core::layout::Alignment::Left,
+                scroll,
+                area,
+                buf,
+            );
         } else {
             let skip = self.lines.len().saturating_sub(area.height as usize);
             for (row, line) in self.lines.iter().skip(skip).enumerate() {

@@ -83,6 +83,14 @@ impl Frame {
         let mut changes = Vec::new();
 
         for y in start_row..max_height {
+            // Mirror `Buffer::diff`'s wide-glyph discipline (the fast path
+            // gets it from ratatui): the trailing cells of a wide symbol
+            // in the new frame must not be emitted as separate updates —
+            // painting them would overwrite half the glyph just written —
+            // and a width change at a cell invalidates its neighbors so
+            // uncovered cells repaint even when they compare equal.
+            let mut invalidated: usize = 0;
+            let mut to_skip: usize = 0;
             for x in 0..max_width {
                 let in_prev = x < prev_area.width && y < prev_area.height;
                 let in_new = x < new_area.width && y < new_area.height;
@@ -98,9 +106,14 @@ impl Frame {
                     &default_cell
                 };
 
-                if prev_cell != new_cell {
+                if (prev_cell != new_cell || invalidated > 0) && to_skip == 0 {
                     changes.push((x, y, new_cell.clone()));
                 }
+
+                let new_width = unicode_width::UnicodeWidthStr::width(new_cell.symbol());
+                let prev_width = unicode_width::UnicodeWidthStr::width(prev_cell.symbol());
+                to_skip = new_width.saturating_sub(1);
+                invalidated = invalidated.max(new_width.max(prev_width)).saturating_sub(1);
             }
         }
 

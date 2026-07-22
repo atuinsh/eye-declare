@@ -118,7 +118,11 @@ impl TextAreaState {
                 let line = &mut self.lines[self.line];
                 let at = byte_at(line, self.col);
                 line.insert_str(at, part);
-                self.col += grapheme_count(part);
+                // Recount like insert_char: if the part starts with a
+                // combining mark it merges into the preceding grapheme,
+                // so adding grapheme_count(part) would overshoot the end
+                // of the line.
+                self.col = grapheme_count(&line[..at + part.len()]);
             }
         }
     }
@@ -729,5 +733,22 @@ mod combining_tests {
             KeyModifiers::NONE,
         )));
         assert!(state.is_blank());
+    }
+
+    /// Found by fuzzing (fuzz/fuzz_targets/text_area_ops.rs): pasting text
+    /// that begins with a combining mark merges it into the grapheme
+    /// before the cursor, so advancing by the pasted text's own grapheme
+    /// count overshoots the end of the line.
+    #[test]
+    fn paste_starting_with_combining_mark_keeps_cursor_in_bounds() {
+        let mut state = TextAreaState::new();
+        press(&mut state, 'e');
+        state.handle(&InputEvent::Paste("\u{301}x".into()));
+
+        let (line, col) = state.cursor();
+        assert_eq!(line, 0);
+        // "e" + U+0301 merge: the line is two graphemes, cursor at its end.
+        assert_eq!(state.text(), "e\u{301}x");
+        assert_eq!(col, 2, "cursor past the end of the line");
     }
 }

@@ -98,3 +98,54 @@ fn commit_block_above_live_tail() {
     assert_eq!(term.viewport_lines()[0], "you: hi");
     assert_eq!(term.viewport_lines()[1], "> inputx");
 }
+
+/// Found by fuzzing (fuzz/fuzz_targets/runtime_transcript.rs): growing the
+/// region out of emptiness in two steps desyncs cursor tracking from the
+/// terminal. Height 0 -> 1 claims a full newline even though the cursor
+/// already sits on the region's first row (the first-render path subtracts
+/// it; the grow path does not), parking tracked cursor.row one past the
+/// region bottom; the next grow then snaps cursor.row up to the bottom row
+/// without emitting any movement, and every cell from then on paints one
+/// row below where the engine believes it is.
+#[test]
+fn growing_tail_from_empty_keeps_cursor_sync() {
+    let width = 18;
+    let mut engine = Engine::new(width, 18);
+    let mut term = TestTerminal::new(18, 18);
+
+    // An app whose tail starts empty (height 0).
+    term.feed(&engine.present(to_frame(&col(), width), None));
+
+    // Tail becomes one blank line...
+    term.feed(&engine.present(to_frame(&col().child(text("")), width), None));
+
+    // ...then two lines with real content on the first.
+    let tail = col().child(text("%")).child(text(""));
+    term.feed(&engine.present(to_frame(&tail, width), None));
+
+    assert_eq!(
+        term.viewport_lines()[0],
+        "%",
+        "content painted one row below the region origin: {:?}",
+        term.viewport_lines()
+    );
+}
+/// Found by fuzzing (fuzz/fuzz_targets/runtime_transcript.rs): when the
+/// frame height changes, diff_from takes its hand-rolled path, which
+/// compared cell-by-cell with no wide-glyph discipline. The new frame's
+/// trailing continuation cell (reset to a blank by ratatui) diffed
+/// against the old content there and was emitted as its own update —
+/// painting a space over the second column of the glyph just written.
+#[test]
+fn wide_glyph_survives_tail_height_change() {
+    let width = 13;
+    let mut engine = Engine::new(width, 9);
+    let mut term = TestTerminal::new(13, 9);
+    term.feed(&engine.present(to_frame(&col(), width), None));
+    term.feed(&engine.present(
+        to_frame(&col().child(text("!*")).child(text("")), width),
+        None,
+    ));
+    term.feed(&engine.present(to_frame(&col().child(text("日")), width), None));
+    assert_eq!(term.viewport_lines()[0], "日");
+}

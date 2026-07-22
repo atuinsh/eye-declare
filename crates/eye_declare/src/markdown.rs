@@ -22,7 +22,6 @@ use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::{Alignment, Rect};
 use ratatui_core::style::{Color, Modifier, Style};
 use ratatui_core::text::{Line, Span, Text as RText};
-use ratatui_core::widgets::Widget;
 
 use crate::element::Element;
 
@@ -168,8 +167,13 @@ impl Element for Markdown {
                     (Block::Text(text), BlockLayout::Text { rows }) => {
                         let rect = Rect::new(area.x, y, area.width, *rows).intersection(area);
                         if rect.height > 0 {
-                            eye_declare_engine::wrap::wrapping_paragraph(borrow_text(text))
-                                .render(rect, buf);
+                            eye_declare_engine::wrap::render_wrapped(
+                                borrow_text(text),
+                                Alignment::Left,
+                                0,
+                                rect,
+                                buf,
+                            );
                         }
                         y = y.saturating_add(*rows);
                     }
@@ -202,6 +206,36 @@ enum Block {
     Table(Table),
 }
 
+/// Make text safe to become cell symbols: tabs expand to spaces; control
+/// characters and zero-width graphemes become U+FFFD. Raw controls in a
+/// cell are hazardous twice over — an ESC would splice into the
+/// terminal's escape stream when the row is emitted, and anything the
+/// width tables call zero columns (NUL, Cf format chars like U+0604, a
+/// lone combining mark) drives ratatui's word wrapper out of bounds
+/// (found by fuzzing: `"\0[佉x"` and `"x\u{604}<!"` at width 2 panic
+/// inside `Paragraph::render`). Combining sequences attached to a base
+/// (`e\u{301}`) have width and pass through untouched.
+fn sanitize(s: &str) -> std::borrow::Cow<'_, str> {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
+    let clean = !s.chars().any(char::is_control) && s.graphemes(true).all(|g| g.width() > 0);
+    if clean {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    for g in s.graphemes(true) {
+        if g == "\t" {
+            out.push_str("    ");
+        } else if g.chars().any(char::is_control) || g.width() == 0 {
+            out.push('\u{FFFD}');
+        } else {
+            out.push_str(g);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 struct Table {
     alignments: Vec<Alignment>,
     /// Header cells; every row has exactly `alignments.len()` cells.
@@ -210,6 +244,29 @@ struct Table {
     /// The table runs to the end of the source — while streaming, it is
     /// still growing, so it stretches to the full render width.
     open: bool,
+}
+
+/// Append content to a line (flow text or a table cell), merging into the
+/// last span when styles match. pulldown-cmark fragments plain text into
+/// many events ("[", entities, replacement chars), and span count is not
+/// free downstream: every span is a wrap-layout boundary, and ratatui's
+/// word wrapper mishandles one of them — a wide char alone in a span at
+/// the last column with another span following writes past the buffer
+/// edge (fuzz-found; upstream bug, spans ["a","佉","b"] at width 2 panic
+/// Paragraph::render). Merging removes every unstyled instance of that
+/// shape.
+fn push_merged(
+    line: &mut Vec<Span<'static>>,
+    content: impl Into<String> + AsRef<str>,
+    style: Style,
+) {
+    if let Some(last) = line.last_mut()
+        && last.style == style
+    {
+        last.content.to_mut().push_str(content.as_ref());
+    } else {
+        line.push(Span::styled(content.into(), style));
+    }
 }
 
 enum BlockLayout {
@@ -442,9 +499,13 @@ fn draw_cells(
         if rect.width == 0 || rect.height == 0 {
             continue;
         }
-        eye_declare_engine::wrap::wrapping_paragraph(RText::from(borrow_line(cell)))
-            .alignment(table.alignments.get(i).copied().unwrap_or(Alignment::Left))
-            .render(rect, buf);
+        eye_declare_engine::wrap::render_wrapped(
+            RText::from(borrow_line(cell)),
+            table.alignments.get(i).copied().unwrap_or(Alignment::Left),
+            0,
+            rect,
+            buf,
+        );
     }
     y.saturating_add(height)
 }
@@ -514,18 +575,18 @@ fn parse(source: &str, styles: &MarkdownStyles) -> Vec<Block> {
                 }
             }
             Event::Code(code) => {
-                let span = Span::styled(code.to_string(), styles.code_inline);
-                match table.as_mut() {
-                    Some(t) if t.in_cell => t.cell.push(span),
-                    Some(_) => {}
-                    None => lines[current_line].push(span),
-                }
+                let dest = match table.as_mut() {
+                    Some(t) if t.in_cell => &mut t.cell,
+                    Some(_) => continue,
+                    None => &mut lines[current_line],
+                };
+                push_merged(dest, sanitize(&code), styles.code_inline);
             }
             Event::Text(text) => {
                 if let Some(t) = table.as_mut() {
                     if t.in_cell {
                         let style = style_stack.last().copied().unwrap_or(styles.base);
-                        t.cell.push(Span::styled(text.to_string(), style));
+                        push_merged(&mut t.cell, sanitize(&text), style);
                     }
                     continue;
                 }
@@ -541,19 +602,27 @@ fn parse(source: &str, styles: &MarkdownStyles) -> Vec<Block> {
                         lines.push(Vec::new());
                     }
                     if !part.is_empty() {
-                        lines[current_line]
-                            .push(Span::styled(format!("{prefix}{part}"), current_style));
+                        let part = sanitize(part);
+                        if prefix.is_empty() {
+                            push_merged(&mut lines[current_line], part, current_style);
+                        } else {
+                            push_merged(
+                                &mut lines[current_line],
+                                format!("{prefix}{part}"),
+                                current_style,
+                            );
+                        }
                     }
                 }
             }
             Event::SoftBreak => {
                 let current_style = style_stack.last().copied().unwrap_or(styles.base);
-                let span = Span::styled(" ", current_style);
-                match table.as_mut() {
-                    Some(t) if t.in_cell => t.cell.push(span),
-                    Some(_) => {}
-                    None => lines[current_line].push(span),
-                }
+                let dest = match table.as_mut() {
+                    Some(t) if t.in_cell => &mut t.cell,
+                    Some(_) => continue,
+                    None => &mut lines[current_line],
+                };
+                push_merged(dest, " ", current_style);
             }
             Event::HardBreak => {
                 match table.as_mut() {
@@ -561,7 +630,7 @@ fn parse(source: &str, styles: &MarkdownStyles) -> Vec<Block> {
                     // space.
                     Some(t) if t.in_cell => {
                         let style = style_stack.last().copied().unwrap_or(styles.base);
-                        t.cell.push(Span::styled(" ", style));
+                        push_merged(&mut t.cell, " ", style);
                     }
                     Some(_) => {}
                     None => {
@@ -1166,5 +1235,37 @@ mod tests {
         assert_eq!(cell_count("| a | b |"), 2);
         assert_eq!(cell_count("| a \\| b |"), 1);
         assert_eq!(cell_count("|"), 1);
+    }
+
+    /// Found by fuzzing (fuzz/fuzz_targets/markdown_element.rs):
+    /// `"\0[佉&"` at width 2 panicked with an out-of-bounds buffer write
+    /// inside ratatui's word wrapper — its trigger is a wide char alone in
+    /// a span at the last column with another span following (upstream
+    /// bug). Merging adjacent same-style spans removes every unstyled
+    /// instance of that shape from parse output.
+    #[test]
+    fn fragmented_spans_with_wide_chars_render_safely() {
+        // "\u{604}" (a Cf format char) is the zero-width variant of the
+        // same trigger, caught by a later fuzz run: not a control char,
+        // but zero columns wide, so it must also never reach a span.
+        for source in ["\u{0}[\u{4f49}&", "x\u{604}<!"] {
+            let el = markdown(source);
+            for width in 1..8 {
+                let height = Element::height(&el, width);
+                let area = Rect::new(0, 0, width, height);
+                let mut buf = Buffer::empty(area);
+                el.render(area, &mut buf); // must not panic
+            }
+        }
+    }
+
+    /// Raw control characters must never survive into span content: an
+    /// ESC would splice into the terminal's escape stream when the row is
+    /// emitted, and zero-width controls confuse wrap layout. Tabs expand;
+    /// everything else becomes U+FFFD.
+    #[test]
+    fn control_chars_are_sanitized() {
+        let lines = rendered(&markdown("a\u{0}b\tc\u{1b}[31m"), 40);
+        assert_eq!(lines, vec!["a\u{fffd}b    c\u{fffd}[31m"]);
     }
 }

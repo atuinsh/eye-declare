@@ -451,6 +451,7 @@ dependencies = [
 name = "eye_declare_engine"
 version = "0.6.1"
 dependencies = [
+ "eye_declare_engine",
  "ratatui-core",
  "ratatui-widgets",
  "unicode-width",

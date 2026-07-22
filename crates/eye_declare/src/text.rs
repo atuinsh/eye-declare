@@ -4,7 +4,6 @@ use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect;
 use ratatui_core::style::Style;
 use ratatui_core::text::{Line, Span, Text as RText};
-use ratatui_core::widgets::Widget;
 
 use crate::element::Element;
 
@@ -62,7 +61,13 @@ impl Element for Text {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        eye_declare_engine::wrap::wrapping_paragraph(self.to_ratatui()).render(area, buf);
+        eye_declare_engine::wrap::render_wrapped(
+            self.to_ratatui(),
+            ratatui_core::layout::Alignment::Left,
+            0,
+            area,
+            buf,
+        );
     }
 }
 
