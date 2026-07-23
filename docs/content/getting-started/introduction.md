@@ -47,12 +47,12 @@ If you've written Elm, iced, or Redux, this is that architecture with one
 addition — the timeline:
 
 ```text
-        terminal events ─┐
-     messages from tasks ─┼─▶ update(&mut model, msg, ctx) ─▶ ctx.push(block)   effect: permanent output
-      subscription ticks ─┘                                   ctx.spawn(stream) effect: async work
-                                        │
-                                        ▼
-                          tail(&model) ─▶ diff ─▶ terminal    view: the live region
+    terminal events ─┐
+messages from tasks ─┼─▶ update(&mut model, msg, ctx) ─▶ ctx.push(block)   effect: permanent output
+ subscription ticks ─┘                                   ctx.spawn(stream) effect: async work
+                                   │
+                                   ▼
+                     tail(&model) ─▶ diff ─▶ terminal    view: the live region
 ```
 
 The model is a plain struct. `update` takes `&mut self`; `tail` takes
