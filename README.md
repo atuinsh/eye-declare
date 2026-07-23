@@ -4,6 +4,10 @@
 
 Inline terminal UIs for Rust, built on [Ratatui](https://ratatui.rs).
 
+[Check out the interactive examples](https://eye-declare.rs)
+
+---
+
 Inline interfaces live in your terminal's normal flow, where finished output scrolls into native scrollback and only a small live region updates in place. Ideal for CLI tools, AI agents, and interactive prompts: programs where output accumulates and history should stay visible, exactly as if the program had printed it.
 
 ![Demo](https://github.com/BinaryMuse/eye-declare/blob/main/assets/demo.gif?raw=true)
