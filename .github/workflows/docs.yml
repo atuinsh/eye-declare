@@ -46,6 +46,8 @@ jobs:
           export PATH="$PWD/.undox/bin:$PATH"
           cd docs
           undox build
+          # The book lives under /book; the site root is the standalone explainer page.
+          cp index.html _site/index.html
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

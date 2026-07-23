@@ -63,7 +63,7 @@ impl App for Agent {
 ```
 
 Messages arrive from terminal input through a keymap and from async work
-through `ctx.spawn` — both shown in the [quick start](/getting-started/quick-start/),
+through `ctx.spawn` — both shown in the [quick start](/book/getting-started/quick-start/),
 which builds a complete runnable app in about sixty lines.
 
 ## Examples
@@ -76,8 +76,8 @@ The repository ships runnable examples that double as learning material:
 
 ## Where to go next
 
-Start with the [introduction](/getting-started/introduction/) for the idea
-behind the design, or jump to the [quick start](/getting-started/quick-start/)
-to build a working app. The [guide](/guide/the-timeline/) covers the concepts
-in depth; the [reference](/reference/widgets/) documents the widgets, runtime,
+Start with the [introduction](/book/getting-started/introduction/) for the idea
+behind the design, or jump to the [quick start](/book/getting-started/quick-start/)
+to build a working app. The [guide](/book/guide/the-timeline/) covers the concepts
+in depth; the [reference](/book/reference/widgets/) documents the widgets, runtime,
 and migration path.

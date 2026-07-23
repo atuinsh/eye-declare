@@ -6,7 +6,7 @@ site:
 
 sources:
   - name: docs
-    url_prefix: /
+    url_prefix: /book
     local:
       path: content
     nav:
