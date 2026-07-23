@@ -47,8 +47,9 @@ cargo run --release -p eye_declare --example perf_report
 # Benchmarks
 cargo bench -p eye_declare           # criterion (benches/frame.rs)
 
-# Docs site
-cd docs && undox build               # Content in docs/content/, config docs/undox.yaml
+# Docs site: root is the standalone explainer (docs/index.html); the book
+# (docs/content/, config docs/undox.yaml) lives under /book
+cd docs && undox build && cp index.html _site/index.html
 ```
 
 ## Code Style
