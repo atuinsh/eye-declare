@@ -148,9 +148,28 @@ where
 
     /// Handle a terminal resize. Committed blocks keep the terminal's own
     /// reflow; the live region is erased and repainted at the new width.
+    ///
+    /// Prefer [`resize_anchored`](Runtime::resize_anchored) when the
+    /// driver can query the cursor position (CSI 6n).
     pub fn resize(&mut self, width: u16, terminal_height: u16) -> Vec<u8> {
         self.timeline.set_terminal_height(terminal_height);
         let mut bytes = self.timeline.resize(width);
+        bytes.extend_from_slice(&self.present());
+        bytes
+    }
+
+    /// [`resize`](Runtime::resize) with the cursor's reported absolute
+    /// position (`(col, row)`, 0-based) queried after the resize event:
+    /// the erase re-anchors on it instead of pre-reflow row arithmetic,
+    /// keeping committed blocks intact on reflowing terminals.
+    pub fn resize_anchored(
+        &mut self,
+        width: u16,
+        terminal_height: u16,
+        cursor: (u16, u16),
+    ) -> Vec<u8> {
+        self.timeline.set_terminal_height(terminal_height);
+        let mut bytes = self.timeline.resize_anchored(width, cursor);
         bytes.extend_from_slice(&self.present());
         bytes
     }
@@ -224,6 +243,7 @@ where
     let mut stdout = io::stdout().lock();
 
     let _guard = RawModeGuard::enable(options.keyboard)?;
+    normalize_start_column();
 
     let (bytes, init_exit) = runtime.startup();
     stdout.write_all(&bytes)?;
@@ -261,7 +281,47 @@ where
                     }
                     bytes
                 }
-                Event::Resize(w, h) => runtime.resize(w, h),
+                Event::Resize(w, h) => {
+                    // Coalesce resize storms (see the tokio driver): drain
+                    // queued events, process keys in order, and handle one
+                    // resize at the latest size.
+                    let (mut w, mut h) = (w, h);
+                    let mut bytes = Vec::new();
+                    let mut exited = None;
+                    while crossterm::event::poll(Duration::ZERO)? {
+                        match crossterm::event::read()? {
+                            Event::Resize(nw, nh) => (w, h) = (nw, nh),
+                            Event::Key(k)
+                                if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
+                            {
+                                let (b, e) = runtime.handle(InputEvent::Key(k));
+                                reject_effects(&mut runtime)?;
+                                bytes.extend_from_slice(&b);
+                                if e.is_some() {
+                                    exited = e;
+                                    break;
+                                }
+                            }
+                            Event::Paste(s) => {
+                                let (b, e) = runtime.handle(InputEvent::Paste(s));
+                                reject_effects(&mut runtime)?;
+                                bytes.extend_from_slice(&b);
+                                if e.is_some() {
+                                    exited = e;
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(output) = exited {
+                        stdout.write_all(&bytes)?;
+                        stdout.flush()?;
+                        return Ok(output);
+                    }
+                    bytes.extend_from_slice(&resize_with_report(&mut runtime, w, h));
+                    bytes
+                }
                 _ => Vec::new(),
             }
         } else {
@@ -273,6 +333,77 @@ where
             stdout.write_all(&bytes)?;
             stdout.flush()?;
         }
+    }
+}
+
+/// Read the cursor position, discarding possibly-stale replies first.
+///
+/// Terminal replies are matched to queries only by arrival order. A
+/// reply can be sitting in the input buffer before we ever ask — a zsh
+/// prompt theme (powerlevel10k) also speaks CSI 6n, and a zle widget
+/// hands us the tty with its last reply potentially unread — and a
+/// timed-out query of our own leaves its late reply queued. Either way
+/// every later read returns the *previous* query's answer, forever.
+/// Reading twice (plus once per known orphan) makes the final value
+/// describe the current screen: all reads happen against the same
+/// screen state, and the extra reads consume queued strays.
+pub(crate) fn read_cursor_position() -> std::io::Result<(u16, u16)> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    /// Replies orphaned by our own timed-out queries.
+    static ORPHANS: AtomicUsize = AtomicUsize::new(0);
+
+    let discard = ORPHANS.load(Ordering::Relaxed) + 1;
+    for _ in 0..discard {
+        if let Err(e) = crossterm::cursor::position() {
+            ORPHANS.fetch_add(1, Ordering::Relaxed);
+            return Err(e);
+        }
+    }
+    match crossterm::cursor::position() {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            ORPHANS.fetch_add(1, Ordering::Relaxed);
+            Err(e)
+        }
+    }
+}
+
+/// Start the region on a fresh line if the embedding handed us the
+/// terminal with the cursor mid-line — a zle widget leaves it at the end
+/// of the still-painted prompt, and raw-ish tty modes mean even a prior
+/// `println!` may not have carried a carriage return. The engine paints
+/// relative to column 0. Called once per run, at startup; terminals that
+/// never answer CSI 6n cost one timeout here.
+pub(crate) fn normalize_start_column() {
+    let Ok((col, _)) = read_cursor_position() else {
+        return;
+    };
+    if col != 0 {
+        // Stdout's lock is reentrant, so this is safe under the
+        // driver's lock.
+        let mut out = io::stdout().lock();
+        let _ = out.write_all(b"\r\n");
+        let _ = out.flush();
+    }
+}
+
+/// Resize re-anchored by a fresh cursor position report — the terminal
+/// has already reflowed by the time the resize event arrives, so the
+/// report is post-reflow ground truth. Falls back to stale-arithmetic
+/// [`Runtime::resize`] if the terminal doesn't answer.
+///
+/// The event's dimensions may be stale during a drag (events queue while
+/// the terminal keeps resizing); painting at a stale width soft-wraps
+/// for real and corrupts row tracking, so re-query the current size and
+/// prefer it.
+pub(crate) fn resize_with_report<A: App>(runtime: &mut Runtime<A>, w: u16, h: u16) -> Vec<u8>
+where
+    A::Msg: Clone,
+{
+    let (w, h) = crossterm::terminal::size().unwrap_or((w, h));
+    match read_cursor_position() {
+        Ok(pos) => runtime.resize_anchored(w, h, pos),
+        Err(_) => runtime.resize(w, h),
     }
 }
 
