@@ -125,3 +125,78 @@ fn resize_height_grow_adds_blank_rows_below() {
     assert_eq!(term.viewport_lines(), vec!["a", "b", "", ""]);
     assert_eq!(term.cursor(), (1, 1));
 }
+
+#[test]
+fn reflow_narrow_splits_hard_line() {
+    let mut term = TestTerminal::new(8, 4);
+    term.feed(b"abcdefgh\r\nxy");
+    term.resize_reflow(4, 4);
+    // The content end keeps its screen row (tmux-verified): the growth
+    // scrolls out the top even though blank rows remain below.
+    assert_eq!(term.scrollback_lines(), vec!["abcd"]);
+    assert_eq!(term.viewport_lines(), vec!["efgh", "xy", "", ""]);
+    assert_eq!(term.cursor(), (1, 2));
+}
+
+#[test]
+fn reflow_widen_rejoins_soft_wrapped_line() {
+    let mut term = TestTerminal::new(4, 4);
+    term.feed(b"abcdef");
+    assert_eq!(term.cursor(), (1, 2));
+    term.resize_reflow(8, 4);
+    assert_eq!(term.viewport_lines(), vec!["abcdef", "", "", ""]);
+    // Offset 6 within the rejoined logical line.
+    assert_eq!(term.cursor(), (0, 6));
+}
+
+#[test]
+fn reflow_widen_does_not_rejoin_hard_lines() {
+    let mut term = TestTerminal::new(4, 4);
+    term.feed(b"abcd\r\nef");
+    term.resize_reflow(8, 4);
+    assert_eq!(term.viewport_lines(), vec!["abcd", "ef", "", ""]);
+    assert_eq!(term.cursor(), (1, 2));
+}
+
+#[test]
+fn reflow_narrow_overflow_scrolls_top_into_scrollback() {
+    let mut term = TestTerminal::new(6, 3);
+    term.feed(b"aaaaaa\r\nbbb\r\nccc");
+    term.resize_reflow(3, 3);
+    assert_eq!(term.scrollback_lines(), vec!["aaa"]);
+    assert_eq!(term.viewport_lines(), vec!["aaa", "bbb", "ccc"]);
+    assert_eq!(term.cursor(), (2, 2));
+}
+
+#[test]
+fn reflow_blank_rows_stay_single_at_any_width() {
+    let mut term = TestTerminal::new(8, 5);
+    term.feed(b"top\r\n\r\nbottom");
+    term.resize_reflow(4, 5);
+    // Blank line stays one row; content-end pinning scrolls "top" out.
+    assert_eq!(term.scrollback_lines(), vec!["top"]);
+    assert_eq!(term.viewport_lines(), vec!["", "bott", "om", "", ""]);
+}
+
+#[test]
+fn reflow_widen_pulls_rows_back_from_scrollback() {
+    let mut term = TestTerminal::new(8, 4);
+    term.feed(b"abcdefgh\r\nxy");
+    term.resize_reflow(4, 4); // "abcd" scrolls out (content-end pinned)
+    term.resize_reflow(8, 4); // rejoins and comes back down
+    assert_eq!(term.scrollback_lines(), Vec::<String>::new());
+    assert_eq!(term.viewport_lines(), vec!["abcdefgh", "xy", "", ""]);
+    assert_eq!(term.cursor(), (1, 2));
+}
+
+#[test]
+fn reflow_erase_breaks_soft_link() {
+    let mut term = TestTerminal::new(4, 4);
+    term.feed(b"abcdef");
+    // Move to the start of the soft-wrapped first row and erase below:
+    // the wrap link must not survive into the next reflow.
+    term.feed(b"\x1b[H\x1b[J");
+    term.feed(b"xy");
+    term.resize_reflow(8, 4);
+    assert_eq!(term.viewport_lines(), vec!["xy", "", "", ""]);
+}
