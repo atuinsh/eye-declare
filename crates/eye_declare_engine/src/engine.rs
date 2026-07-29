@@ -26,6 +26,18 @@ pub struct Engine {
     emitted_rows: u16,
     /// Terminal height, used to avoid writing to rows in scrollback.
     terminal_height: u16,
+    /// Whether the last present parked the hidden cursor on the region's
+    /// top row (no cursor hint). See
+    /// [`position_cursor`](Engine::position_cursor): a parked cursor
+    /// makes a resize-time position report the region top directly.
+    parked: bool,
+    /// Set by the resize resets: the screen row the erased region starts
+    /// at (`None` when unknown). The next present is a repaint of
+    /// content that was *already on screen* — it must not stream
+    /// overflow rows into scrollback again (a resize drag would dump a
+    /// screenful of duplicates per event), and an overflowing tail
+    /// takes the visible screen instead of scrolling for rows.
+    resumed_at: Option<u16>,
 }
 
 impl Engine {
@@ -40,7 +52,74 @@ impl Engine {
             prev_frame: None,
             emitted_rows: 0,
             terminal_height,
+            parked: false,
+            resumed_at: None,
         }
+    }
+
+    /// The present after a resize reset: the region was just erased from
+    /// screen row `resumed_at` down and the frame replaces content that
+    /// was already visible.
+    ///
+    /// Unlike a true first render, nothing here belongs in scrollback —
+    /// the frame's overflow (if it is taller than the screen) was
+    /// already emitted in some earlier form, so re-streaming it would
+    /// duplicate a screenful per resize event. An overflowing frame
+    /// instead claims the whole screen and paints only its visible
+    /// window; rows above the window become unreachable, like any
+    /// scrolled content.
+    fn repaint_after_reset(
+        &mut self,
+        new_frame: Frame,
+        cursor_hint: Option<(u16, u16)>,
+        park_hidden: bool,
+    ) -> Vec<u8> {
+        let start = self.resumed_at.take().unwrap_or(0);
+        let new_height = new_frame.area().height;
+        let mut output = Vec::new();
+
+        let rows_below = self.terminal_height.saturating_sub(start);
+        let start = if new_height > rows_below && start > 0 {
+            // The frame needs more rows than remain below the erase
+            // point: take the whole screen — it would end up covered
+            // anyway, and claiming rows by scrolling would shove the
+            // content above into scrollback line by line.
+            output.extend_from_slice(b"\x1b[H\x1b[J");
+            0
+        } else {
+            start
+        };
+
+        if new_height <= self.terminal_height.saturating_sub(start) {
+            // Fits below the erase point: claim rows without scrolling.
+            output.resize(output.len() + new_height as usize - 1, b'\n');
+            self.emitted_rows = new_height;
+            self.cursor.row = new_height - 1;
+        } else {
+            // Taller than the screen: fill it, no scrolling. Rows above
+            // the visible window are never physically claimed — they're
+            // unreachable regardless, exactly as if they had scrolled.
+            // (Saturating: a resize can report height zero.)
+            output.resize(
+                output.len() + self.terminal_height.saturating_sub(1) as usize,
+                b'\n',
+            );
+            self.emitted_rows = new_height;
+            self.cursor.row = new_height - 1;
+        }
+        self.cursor.col = 0;
+
+        let empty = Frame::new(ratatui_core::buffer::Buffer::empty(
+            ratatui_core::layout::Rect::new(0, 0, self.width, 0),
+        ));
+        let scrolled_past = self.emitted_rows.saturating_sub(self.terminal_height);
+        let mut diff = new_frame.diff_from(&empty, scrolled_past);
+        diff.retain_visible(scrolled_past);
+        output.extend_from_slice(&diff.to_escape_sequences(&mut self.cursor));
+
+        self.position_cursor(&mut output, cursor_hint, park_hidden);
+        self.prev_frame = Some(new_frame);
+        output
     }
 
     /// The content width frames are expected to be rendered at.
@@ -68,6 +147,19 @@ impl Engine {
     ///
     /// Returns an empty Vec if nothing changed.
     pub fn present(&mut self, new_frame: Frame, cursor_hint: Option<(u16, u16)>) -> Vec<u8> {
+        self.present_inner(new_frame, cursor_hint, true)
+    }
+
+    /// [`present`](Engine::present), with control over parking the
+    /// hidden cursor. [`commit`](Engine::commit) presents the block as
+    /// an intermediate frame and immediately claims the row below it —
+    /// parking there would be movement churn undone a byte later.
+    fn present_inner(
+        &mut self,
+        new_frame: Frame,
+        cursor_hint: Option<(u16, u16)>,
+        park_hidden: bool,
+    ) -> Vec<u8> {
         let new_height = new_frame.area().height;
 
         // First render
@@ -75,6 +167,10 @@ impl Engine {
             if new_height == 0 {
                 self.prev_frame = Some(new_frame);
                 return Vec::new();
+            }
+
+            if self.resumed_at.is_some() {
+                return self.repaint_after_reset(new_frame, cursor_hint, park_hidden);
             }
 
             // For the first render, we need to claim space and write everything.
@@ -114,7 +210,7 @@ impl Engine {
             let escape_bytes = diff.to_escape_sequences(&mut self.cursor);
             output.extend_from_slice(&escape_bytes);
 
-            self.position_cursor(&mut output, cursor_hint);
+            self.position_cursor(&mut output, cursor_hint, park_hidden);
             self.prev_frame = Some(new_frame);
             return output;
         }
@@ -130,7 +226,7 @@ impl Engine {
             // Even if content didn't change, cursor position might have
             // (e.g., cursor moved within an input field)
             let mut output = Vec::new();
-            self.position_cursor(&mut output, cursor_hint);
+            self.position_cursor(&mut output, cursor_hint, park_hidden);
             self.prev_frame = Some(new_frame);
             return output;
         }
@@ -200,7 +296,7 @@ impl Engine {
         let escape_bytes = diff.to_escape_sequences(&mut self.cursor);
         output.extend_from_slice(&escape_bytes);
 
-        self.position_cursor(&mut output, cursor_hint);
+        self.position_cursor(&mut output, cursor_hint, park_hidden);
         self.prev_frame = Some(new_frame);
         output
     }
@@ -228,7 +324,86 @@ impl Engine {
         self.cursor = CursorState::new();
         self.prev_frame = None;
         self.emitted_rows = 0;
+        self.resumed_at = Some(0);
         output
+    }
+
+    /// [`reset_region`](Engine::reset_region) with ground truth: the
+    /// cursor's absolute screen position `(col, row)` (0-based) as
+    /// reported by the terminal *after* it reflowed for the new width.
+    ///
+    /// A stale-arithmetic erase after a reflow either starts too low
+    /// (leaving unrepaintable fragments above the region) or too high
+    /// (destroying committed rows). The report re-anchors us:
+    ///
+    /// - A parked cursor (hidden — presents without a cursor hint park
+    ///   it) sits on the region's top row, so the report *is* the erase
+    ///   target — exact on every terminal, reflowing or truncating.
+    /// - A visible cursor sits at the app's hint, and the distance up
+    ///   to the region top is recomputed from the previous frame: each
+    ///   region row is a hard line the terminal re-wraps at the new
+    ///   width, occupying `ceil(content/width)` physical rows, trailing
+    ///   blanks trimmed (terminals drop them when re-wrapping).
+    ///   Trimming errs toward starting the erase *lower*: a model
+    ///   mismatch leaves a stale fragment rather than destroying
+    ///   committed output. (Truncating terminals — xterm, urxvt,
+    ///   screen — don't re-wrap, so this path over-erases there; every
+    ///   terminal Atuin targets re-wraps, and the parked path is exact
+    ///   everywhere.)
+    ///
+    /// The erase then targets the region top absolutely, which also
+    /// stops the erase point from drifting across a resize drag.
+    pub fn reset_region_anchored(&mut self, new_width: u16, cursor: (u16, u16)) -> Vec<u8> {
+        let (_, cpr_row) = cursor;
+        let distance = if self.parked {
+            0
+        } else {
+            self.reflow_distance(new_width)
+        };
+
+        let start = (cpr_row as i32 - distance as i32).max(0);
+
+        let mut output = Vec::new();
+        output.extend_from_slice(format!("\x1b[{};1H", start + 1).as_bytes());
+        output.extend_from_slice(b"\x1b[J");
+
+        self.width = new_width;
+        self.cursor = CursorState::new();
+        self.prev_frame = None;
+        self.emitted_rows = 0;
+        self.resumed_at = Some(start.min(u16::MAX as i32) as u16);
+        output
+    }
+
+    /// Physical rows between the region top and the cursor after the
+    /// terminal re-wrapped our rows (each one a hard line, created by
+    /// its own linefeed) at `new_width`.
+    fn reflow_distance(&self, new_width: u16) -> u32 {
+        let new_width = new_width.max(1) as u32;
+        if new_width >= self.width as u32 {
+            // Hard lines never rejoin on widen; one physical row each.
+            return self.cursor.row as u32;
+        }
+        let prev_height = self
+            .prev_frame
+            .as_ref()
+            .map(|f| f.area().height)
+            .unwrap_or(0);
+        let mut distance: u32 = 0;
+        for row in 0..self.cursor.row {
+            let content = if row < prev_height {
+                self.prev_frame
+                    .as_ref()
+                    .map(|f| f.content_width_of_row(row) as u32)
+                    .unwrap_or(0)
+            } else {
+                // Claimed rows below the frame are blank.
+                0
+            };
+            distance += content.div_ceil(new_width).max(1);
+        }
+        // The cursor's own row: the fragment its column lands on.
+        distance + self.cursor.col as u32 / new_width
     }
 
     /// Reset for a width change: clear the visible screen (scrollback is
@@ -248,6 +423,7 @@ impl Engine {
         self.cursor = CursorState::new();
         self.prev_frame = None;
         self.emitted_rows = 0;
+        self.resumed_at = Some(0);
         b"\x1b[2J\x1b[H".to_vec()
     }
 
@@ -274,7 +450,7 @@ impl Engine {
             return Vec::new();
         }
 
-        let mut output = self.present(Frame::new(rows.clone()), None);
+        let mut output = self.present_inner(Frame::new(rows.clone()), None, false);
 
         // The next region origin is the row below the block. Make it
         // physically exist with the cursor on it before the shift: an LF
@@ -283,8 +459,8 @@ impl Engine {
         if self.cursor.row < committed_height {
             output.push(b'\r');
             self.cursor.col = 0;
-            let down = (committed_height - self.cursor.row) as usize;
-            output.resize(output.len() + down, b'\n');
+            let down = committed_height - self.cursor.row;
+            output.resize(output.len() + down as usize, b'\n');
             self.cursor.row = committed_height;
             self.emitted_rows = self.emitted_rows.max(committed_height + 1);
         }
@@ -428,14 +604,34 @@ impl Engine {
 
     /// Append escape sequences to position (and show) the terminal cursor
     /// at `hint` (`(col, row)`), or hide it when `hint` is `None`.
-    fn position_cursor(&mut self, output: &mut Vec<u8>, hint: Option<(u16, u16)>) {
+    fn position_cursor(
+        &mut self,
+        output: &mut Vec<u8>,
+        hint: Option<(u16, u16)>,
+        park_hidden: bool,
+    ) {
         if let Some((col, row)) = hint {
             crate::escape::write_relative_move(output, &mut self.cursor, row, col);
             // Show cursor at the component's cursor position
             output.extend_from_slice(b"\x1b[?25h");
-        } else {
-            // No cursor hint — hide cursor
+            self.parked = false;
+        } else if !park_hidden {
             output.extend_from_slice(b"\x1b[?25l");
+            self.parked = false;
+        } else {
+            // No cursor hint: hide the cursor and park it on the
+            // region's reachable top row. The position is invisible, but
+            // it makes a later resize's position report *be* the region
+            // top: the cursor rides its logical line through any reflow,
+            // and stays put in a truncating terminal — either way no
+            // arithmetic can drift. (Left at the last painted cell it
+            // would sit on the content's final row, which reflowing
+            // terminals pin to its screen row — a report from there is
+            // blind to re-wrapping above it.)
+            let top = self.emitted_rows.saturating_sub(self.terminal_height);
+            crate::escape::write_relative_move(output, &mut self.cursor, top, 0);
+            output.extend_from_slice(b"\x1b[?25l");
+            self.parked = true;
         }
     }
 }
@@ -462,10 +658,24 @@ mod tests {
     #[test]
     fn commit_scrolled_is_silent_when_cursor_below_origin() {
         let mut engine = Engine::new(10, 24);
-        let _ = engine.present(Frame::new(buffer_with_lines(10, &["aaa", "bbb"])), None);
-        // Cursor ended on the last diffed row (row 1), at/below origin 1.
+        // A visible cursor on row 1 sits at/below the new origin 1.
+        let _ = engine.present(
+            Frame::new(buffer_with_lines(10, &["aaa", "bbb"])),
+            Some((0, 1)),
+        );
         let bytes = engine.commit_scrolled(1);
         assert!(bytes.is_empty());
+        assert_eq!(engine.emitted_rows(), 1);
+    }
+
+    #[test]
+    fn commit_scrolled_moves_parked_cursor_to_origin() {
+        let mut engine = Engine::new(10, 24);
+        // No hint: the hidden cursor parks on the region top, above the
+        // new origin — the shift must move it down first.
+        let _ = engine.present(Frame::new(buffer_with_lines(10, &["aaa", "bbb"])), None);
+        let bytes = engine.commit_scrolled(1);
+        assert!(!bytes.is_empty());
         assert_eq!(engine.emitted_rows(), 1);
     }
 
@@ -516,10 +726,22 @@ mod tests {
             "sealing identical content must not repaint it, got {printable:?}"
         );
         assert!(
-            printable.ends_with("\r\n"),
+            printable.ends_with('\n'),
             "seal should end by claiming the origin row, got {printable:?}"
         );
         assert_eq!(engine.emitted_rows(), 1);
+    }
+
+    #[test]
+    fn zero_height_resize_does_not_panic() {
+        // Terminals can report a zero-height size mid-drag; the repaint
+        // must not underflow its row claim.
+        let mut engine = Engine::new(10, 24);
+        let _ = engine.present(Frame::new(buffer_with_lines(10, &["aaa", "bbb"])), None);
+        engine.set_terminal_height(0);
+        let _ = engine.reset_region_anchored(10, (0, 0));
+        let bytes = engine.present(Frame::new(buffer_with_lines(10, &["aaa", "bbb"])), None);
+        let _ = bytes;
     }
 
     #[test]

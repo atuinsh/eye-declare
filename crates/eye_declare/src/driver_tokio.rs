@@ -49,6 +49,7 @@ where
     let mut stdout = io::stdout().lock();
 
     let _guard = RawModeGuard::enable(options.keyboard)?;
+    crate::runtime::normalize_start_column();
 
     let (bytes, init_exit) = runtime.startup();
     stdout.write_all(&bytes)?;
@@ -78,7 +79,72 @@ where
                         runtime.handle(InputEvent::Key(k))
                     }
                     Some(Ok(Event::Paste(s))) => runtime.handle(InputEvent::Paste(s)),
-                    Some(Ok(Event::Resize(w, h))) => (runtime.resize(w, h), None),
+                    // Coalesce resize storms: a drag delivers events
+                    // faster than an erase + repaint + cursor query per
+                    // event can keep up, which queues stale sizes and
+                    // multiplies position queries. Drain whatever is
+                    // already queued — keys are processed in order,
+                    // resizes collapse into one handled at the latest
+                    // size. Querying the cursor synchronously here is
+                    // safe: the EventStream's reader thread is parked
+                    // between events, so the shared crossterm reader is
+                    // free, and events arriving during the query are
+                    // re-queued, not dropped.
+                    Some(Ok(Event::Resize(w, h))) => {
+                        // Drain via the plain poll/read API, NOT the
+                        // stream: polling the stream to Pending wakes its
+                        // background reader, which then holds crossterm's
+                        // shared reader lock and starves the position
+                        // query below into its timeout.
+                        let mut queued = Vec::new();
+                        while queued.len() < 64
+                            && crossterm::event::poll(Duration::ZERO).unwrap_or(false)
+                        {
+                            match crossterm::event::read() {
+                                Ok(ev) => queued.push(ev),
+                                Err(_) => break,
+                            }
+                        }
+
+                        let (mut w, mut h) = (w, h);
+                        let mut bytes = Vec::new();
+                        let mut exit = None;
+                        for ev in queued {
+                            match ev {
+                                Event::Resize(nw, nh) => (w, h) = (nw, nh),
+                                Event::Key(k)
+                                    if matches!(
+                                        k.kind,
+                                        KeyEventKind::Press | KeyEventKind::Repeat
+                                    ) =>
+                                {
+                                    let (b, e) = runtime.handle(InputEvent::Key(k));
+                                    bytes.extend_from_slice(&b);
+                                    if e.is_some() {
+                                        exit = e;
+                                        break;
+                                    }
+                                }
+                                Event::Paste(s) => {
+                                    let (b, e) = runtime.handle(InputEvent::Paste(s));
+                                    bytes.extend_from_slice(&b);
+                                    if e.is_some() {
+                                        exit = e;
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        if exit.is_none() {
+                            bytes.extend_from_slice(&crate::runtime::resize_with_report(
+                                &mut runtime,
+                                w,
+                                h,
+                            ));
+                        }
+                        (bytes, exit)
+                    }
                     Some(Ok(_)) => (Vec::new(), None),
                     Some(Err(e)) => return Err(e),
                     // Terminal input ended (stdin closed): exit cleanly,

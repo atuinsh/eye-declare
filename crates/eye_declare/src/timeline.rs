@@ -67,8 +67,21 @@ impl Timeline {
     /// reflow, per the committed-is-immutable semantics) and reset
     /// tracking. Follow with a [`present`](Timeline::present) to repaint
     /// the tail at the new width.
+    ///
+    /// Prefer [`resize_anchored`](Timeline::resize_anchored) when a
+    /// cursor position report is available: without one the erase relies
+    /// on pre-reflow row arithmetic, which drifts on reflowing terminals.
     pub fn resize(&mut self, new_width: u16) -> Vec<u8> {
         self.engine.reset_region(new_width)
+    }
+
+    /// [`resize`](Timeline::resize) re-anchored by a cursor position
+    /// report: `cursor` is the absolute `(col, row)` (0-based) the
+    /// terminal reported *after* reflowing at the new width. The erase
+    /// targets the region top exactly instead of trusting stale row
+    /// arithmetic.
+    pub fn resize_anchored(&mut self, new_width: u16, cursor: (u16, u16)) -> Vec<u8> {
+        self.engine.reset_region_anchored(new_width, cursor)
     }
 
     /// Hand the terminal back to the shell: park the cursor at column 0

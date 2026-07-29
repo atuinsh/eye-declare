@@ -18,7 +18,17 @@ pub struct TestTerminal {
     cursor_col: usize,
     pending_wrap: bool,
     viewport: Vec<Vec<char>>,
-    scrollback: Vec<String>,
+    /// Per-viewport-row soft-wrap flag: `wrapped[r]` means row `r`
+    /// overflowed and continues on row `r + 1` (set only by auto-wrap,
+    /// never by an explicit linefeed). This is what lets
+    /// [`resize_reflow`](TestTerminal::resize_reflow) rejoin lines the
+    /// way reflowing terminals do.
+    wrapped: Vec<bool>,
+    /// Rows scrolled out the top, oldest first, with their soft-wrap
+    /// flags — kept as raw cells so [`resize_reflow`](TestTerminal::resize_reflow)
+    /// can rejoin them and pull them back on widen, as real reflowing
+    /// terminals do.
+    scrollback: Vec<(Vec<char>, bool)>,
 }
 
 impl TestTerminal {
@@ -31,6 +41,7 @@ impl TestTerminal {
             cursor_col: 0,
             pending_wrap: false,
             viewport: vec![vec![' '; width]; height],
+            wrapped: vec![false; height],
             scrollback: Vec::new(),
         }
     }
@@ -45,7 +56,10 @@ impl TestTerminal {
     /// Lines that have scrolled out of the viewport, oldest first.
     /// Trailing whitespace is trimmed.
     pub fn scrollback_lines(&self) -> Vec<String> {
-        self.scrollback.clone()
+        self.scrollback
+            .iter()
+            .map(|(cells, _)| trimmed_line(cells))
+            .collect()
     }
 
     /// The current viewport contents, top to bottom, trailing whitespace
@@ -68,8 +82,10 @@ impl TestTerminal {
         }
         if self.cursor_row + 1 >= self.height {
             let top = self.viewport.remove(0);
-            self.scrollback.push(trimmed_line(&top));
+            let flag = self.wrapped.remove(0);
+            self.scrollback.push((top, flag));
             self.viewport.push(vec![' '; self.width]);
+            self.wrapped.push(false);
             self.cursor_row = self.height - 1;
         } else {
             self.cursor_row += 1;
@@ -92,7 +108,10 @@ impl TestTerminal {
         }
         if self.pending_wrap || self.cursor_col + char_width > self.width {
             // Auto-wrap, including a wide glyph that would straddle the
-            // right edge: terminals push it whole onto the next row.
+            // right edge: terminals push it whole onto the next row. The
+            // row being left records the soft wrap (before linefeed —
+            // a scroll at the bottom shifts the flags too).
+            self.wrapped[self.cursor_row] = true;
             self.linefeed();
             self.cursor_col = 0;
         }
@@ -160,17 +179,149 @@ impl TestTerminal {
 
         while self.viewport.len() > height && self.cursor_row + 1 > height {
             let top = self.viewport.remove(0);
-            self.scrollback.push(trimmed_line(&top));
+            let flag = self.wrapped.remove(0);
+            self.scrollback.push((top, flag));
             self.cursor_row -= 1;
         }
         self.viewport.truncate(height);
+        self.wrapped.truncate(height);
         while self.viewport.len() < height {
             self.viewport.push(vec![' '; width]);
+            self.wrapped.push(false);
         }
         self.height = height;
 
         self.cursor_col = self.cursor_col.min(width.saturating_sub(1));
         self.cursor_row = self.cursor_row.min(height.saturating_sub(1));
+        self.pending_wrap = false;
+    }
+
+    /// Change dimensions the way reflowing terminals (Ghostty, kitty,
+    /// iTerm2, WezTerm, tmux, …) do: scrollback and viewport re-wrap as
+    /// one document — soft-wrapped rows rejoin into logical lines,
+    /// logical lines re-wrap at the new width — and the *content end
+    /// stays pinned to its screen row*: on narrow the growth scrolls out
+    /// the top (even with blank rows below), on widen rows are pulled
+    /// back from scrollback. The cursor follows its logical position.
+    /// (Verified against tmux 3.6; Ghostty and kitty behave the same
+    /// way.) Rows created by explicit linefeeds are hard lines and never
+    /// rejoin.
+    ///
+    /// Model notes, matching common terminal behavior closely enough for
+    /// engine tests:
+    /// - Trailing blank cells of a hard line are trimmed before
+    ///   re-wrapping (so a blank row stays one row at any width).
+    /// - Trailing all-blank rows below the content and cursor don't
+    ///   count as content (they never push anything into scrollback).
+    /// - Wide glyphs may be split at the wrap point (real terminals push
+    ///   them whole); keep test content narrow-glyph-only near edges.
+    pub fn resize_reflow(&mut self, width: usize, height: usize) {
+        // The whole document: scrollback rows, then viewport rows. The
+        // cursor is a document row index from here on.
+        let mut doc: Vec<(Vec<char>, bool)> = std::mem::take(&mut self.scrollback);
+        let sb_len = doc.len();
+        for (row, flag) in self.viewport.drain(..).zip(self.wrapped.drain(..)) {
+            doc.push((row, flag));
+        }
+        let cursor_doc = sb_len + self.cursor_row;
+
+        // Drop trailing blank rows that hold neither content nor cursor.
+        let mut used = doc.len();
+        while used > cursor_doc + 1
+            && used > 0
+            && trimmed_line(&doc[used - 1].0).is_empty()
+            && !doc[used - 1].1
+        {
+            used -= 1;
+        }
+        // How far the content end sat above the bottom of the screen —
+        // reflowing terminals preserve this gap exactly.
+        let bottom_gap = (self.height + sb_len).saturating_sub(used);
+
+        // Rejoin soft-wrapped rows into logical lines. A wrapped row
+        // contributes its full width (it overflowed, so it is full);
+        // the final hard fragment is trimmed.
+        let mut lines: Vec<Vec<char>> = Vec::new();
+        let mut cursor_line = 0;
+        let mut cursor_offset = 0;
+        let mut current: Vec<char> = Vec::new();
+        for (row, (cells, wrapped)) in doc.iter().take(used).enumerate() {
+            if row == cursor_doc {
+                cursor_line = lines.len();
+                cursor_offset = current.len() + self.cursor_col;
+            }
+            if *wrapped {
+                current.extend(cells.iter().copied());
+            } else {
+                let mut tail = cells.clone();
+                while tail.last() == Some(&' ') {
+                    tail.pop();
+                }
+                current.extend(tail);
+                lines.push(std::mem::take(&mut current));
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+        if lines.is_empty() {
+            lines.push(Vec::new());
+        }
+
+        // Re-wrap each logical line at the new width.
+        let mut rows: Vec<(Vec<char>, bool)> = Vec::new();
+        let mut cursor_new = (0, 0);
+        for (i, line) in lines.iter().enumerate() {
+            let start = rows.len();
+            let mut chunks: Vec<&[char]> = line.chunks(width.max(1)).collect();
+            if chunks.is_empty() {
+                chunks.push(&[]);
+            }
+            let n = chunks.len();
+            for (j, chunk) in chunks.into_iter().enumerate() {
+                let mut row: Vec<char> = chunk.to_vec();
+                row.resize(width, ' ');
+                rows.push((row, j + 1 < n));
+            }
+            if i == cursor_line {
+                let frag = (cursor_offset / width.max(1)).min(n - 1);
+                cursor_new = (
+                    start + frag,
+                    (cursor_offset - frag * width.max(1)).min(width.saturating_sub(1)),
+                );
+            }
+        }
+
+        // Pin the content end: the first visible document row is chosen
+        // so the last content row keeps its distance from the screen
+        // bottom (until scrollback runs dry), while keeping the cursor
+        // on screen.
+        let visible_below_end = height.saturating_sub(bottom_gap).max(1);
+        let mut first_visible = rows.len().saturating_sub(visible_below_end);
+        first_visible = first_visible.min(cursor_new.0);
+        if cursor_new.0 - first_visible >= height {
+            first_visible = cursor_new.0 + 1 - height;
+        }
+
+        self.scrollback = rows.drain(..first_visible).collect();
+        self.viewport = Vec::with_capacity(height);
+        self.wrapped = Vec::with_capacity(height);
+        for (row, flag) in rows {
+            if self.viewport.len() == height {
+                break;
+            }
+            self.viewport.push(row);
+            self.wrapped.push(flag);
+        }
+        while self.viewport.len() < height {
+            self.viewport.push(vec![' '; width]);
+            self.wrapped.push(false);
+        }
+
+        self.width = width;
+        self.height = height;
+        self.cursor_row = cursor_new.0 - first_visible;
+        self.cursor_col = cursor_new.1;
         self.pending_wrap = false;
     }
 
@@ -258,9 +409,31 @@ impl vte::Perform for TestTerminal {
                 self.pending_wrap = false;
             }
             'H' => {
-                self.cursor_row = 0;
-                self.cursor_col = 0;
+                // CUP: 1-based `row;col`, both defaulting to 1.
+                let mut values = params.iter();
+                let row = values
+                    .next()
+                    .and_then(|v| v.first().copied())
+                    .map(usize::from)
+                    .filter(|&n| n > 0)
+                    .unwrap_or(1);
+                let col = values
+                    .next()
+                    .and_then(|v| v.first().copied())
+                    .map(usize::from)
+                    .filter(|&n| n > 0)
+                    .unwrap_or(1);
+                self.cursor_row = (row - 1).min(self.height.saturating_sub(1));
+                self.cursor_col = (col - 1).min(self.width.saturating_sub(1));
                 self.pending_wrap = false;
+            }
+            'K' => {
+                // EL 0: erase cursor to end of line. Breaks the row's
+                // continuation, like real reflowing terminals.
+                for col in self.cursor_col..self.width {
+                    self.viewport[self.cursor_row][col] = ' ';
+                }
+                self.wrapped[self.cursor_row] = false;
             }
             'J' => {
                 for row in self.cursor_row..self.height {
@@ -272,6 +445,9 @@ impl vte::Perform for TestTerminal {
                     for col in start_col..self.width {
                         self.viewport[row][col] = ' ';
                     }
+                    // Erasing a row's tail breaks its continuation onto
+                    // the next row, as in real reflowing terminals.
+                    self.wrapped[row] = false;
                 }
             }
             'h' | 'l' | 'm' => {}
