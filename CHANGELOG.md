@@ -1,3 +1,8 @@
+## [0.6.4](https://github.com/atuinsh/eye-declare/compare/v0.6.3..v0.6.4) - 2026-07-29
+
+### 🐛 Bug Fixes
+
+- Anchor resize repaints on cursor position reports ([#54](https://github.com/atuinsh/eye-declare/issues/54)) - ([c96c6d7](https://github.com/atuinsh/eye-declare/commit/c96c6d7497e995f7ea673e7eff7bdba282987df0))
 ## [0.6.3](https://github.com/atuinsh/eye-declare/compare/v0.6.2..v0.6.3) - 2026-07-22
 
 ### 🐛 Bug Fixes
