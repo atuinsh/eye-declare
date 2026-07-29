@@ -1,6 +1,7 @@
 use ratatui_core::{
     buffer::{Buffer, Cell},
     layout::Rect,
+    style::Style,
 };
 
 /// The output of a render pass. Owns the buffer.
@@ -39,6 +40,25 @@ impl Frame {
         );
     }
 
+    /// The row's rendered width up to its last non-blank cell — the
+    /// content a reflowing terminal re-wraps when the width shrinks
+    /// (terminals drop trailing blanks when re-wrapping, whether the
+    /// cells were written or erased).
+    pub fn content_width_of_row(&self, row: u16) -> u16 {
+        let area = self.buffer.area;
+        if row >= area.height {
+            return 0;
+        }
+        for x in (0..area.width).rev() {
+            let symbol = self.buffer[(x, row)].symbol();
+            if symbol != " " {
+                let width = unicode_width::UnicodeWidthStr::width(symbol).max(1) as u16;
+                return (x + width).min(area.width);
+            }
+        }
+        0
+    }
+
     /// Diff against a previous frame, producing the set of changed cells.
     ///
     /// Handles height mismatches: if the frames have different heights,
@@ -67,11 +87,7 @@ impl Frame {
                 .into_iter()
                 .map(|(x, y, cell)| (x, y, cell.clone()))
                 .collect();
-            return Diff {
-                cells: changes,
-                new_area,
-                prev_area,
-            };
+            return self.build_diff(changes, prev_area);
         }
 
         // Heights differ — compare directly without allocating padded buffers.
@@ -117,8 +133,65 @@ impl Frame {
             }
         }
 
+        self.build_diff(changes, prev_area)
+    }
+
+    /// Build a [`Diff`], lifting each row's trailing run of blank
+    /// default-styled cell writes into a line clear.
+    ///
+    /// Writing spaces to clear old content plants real cells the
+    /// terminal treats as content — they re-wrap on resize (phantom
+    /// blank fragments) and pad committed rows in scrollback. An
+    /// erase-to-end-of-line leaves genuinely empty cells (and is far
+    /// fewer bytes). A run is only lifted when everything to its right
+    /// in the new frame is blank and default-styled, so the erase can't
+    /// eat styled cells that aren't repainted.
+    fn build_diff(&self, cells: Vec<(u16, u16, Cell)>, prev_area: Rect) -> Diff {
+        let new_area = self.buffer.area;
+        // A default cell's style, for blankness checks — `Cell::style()`
+        // reports explicit `Reset` colors, which a bare
+        // `Style::default()` (all `None`) never equals.
+        let blank_style: Style = Cell::default().style();
+        // Per new-frame row: index one past the last cell that must
+        // survive an erase (non-space symbol or non-default style).
+        let boundary = |y: u16| -> u16 {
+            if y >= new_area.height {
+                return 0;
+            }
+            for x in (0..new_area.width).rev() {
+                let cell = &self.buffer[(x, y)];
+                if cell.symbol() != " " || cell.style() != blank_style {
+                    return x + 1;
+                }
+            }
+            0
+        };
+
+        let mut kept = Vec::with_capacity(cells.len());
+        let mut line_clears: Vec<(u16, u16)> = Vec::new();
+        let mut current_boundary: Option<(u16, u16)> = None;
+        for (x, y, cell) in cells {
+            let b = match current_boundary {
+                Some((row, b)) if row == y => b,
+                _ => {
+                    let b = boundary(y);
+                    current_boundary = Some((y, b));
+                    b
+                }
+            };
+            if x >= b && cell.symbol() == " " && cell.style() == blank_style {
+                match line_clears.last_mut() {
+                    Some((cx, cy)) if *cy == y => *cx = (*cx).min(x),
+                    _ => line_clears.push((x, y)),
+                }
+            } else {
+                kept.push((x, y, cell));
+            }
+        }
+
         Diff {
-            cells: changes,
+            cells: kept,
+            line_clears,
             new_area,
             prev_area,
         }
@@ -129,6 +202,11 @@ impl Frame {
 pub struct Diff {
     /// Changed cells: (x, y, new_cell).
     pub cells: Vec<(u16, u16, Cell)>,
+    /// Erase-to-end-of-line anchors, row-major: at `(x, y)`, everything
+    /// from `x` rightward is blank in the new frame and cleared with EL
+    /// instead of written spaces — written blanks are content a
+    /// reflowing terminal re-wraps; erased cells are not.
+    pub line_clears: Vec<(u16, u16)>,
     /// The area of the new (current) frame.
     pub new_area: Rect,
     /// The area of the previous frame.
@@ -160,7 +238,7 @@ impl Frame {
 impl Diff {
     /// Whether there are no changes.
     pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
+        self.cells.is_empty() && self.line_clears.is_empty()
     }
 
     /// Number of changed cells.
@@ -187,6 +265,7 @@ impl Diff {
     pub fn retain_visible(&mut self, min_row: u16) {
         if min_row > 0 {
             self.cells.retain(|(_, y, _)| *y >= min_row);
+            self.line_clears.retain(|(_, y)| *y >= min_row);
         }
     }
 }
@@ -204,6 +283,41 @@ mod tests {
         let f2 = make_frame(&["hello", "world"]);
         let diff = f2.diff(&f1);
         assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn diff_lifts_trailing_blank_writes_into_line_clear() {
+        let f1 = make_frame(&["hello world"]);
+        let f2 = make_frame(&["hi         "]);
+        let diff = f2.diff(&f1);
+        // 'i' is written; the old "llo world" tail becomes one erase
+        // instead of nine space cells the terminal would treat as
+        // content.
+        assert_eq!(diff.line_clears, vec![(2, 0)]);
+        assert!(
+            diff.cells
+                .iter()
+                .all(|(x, _, c)| *x < 2 || c.symbol() != " "),
+            "no blank writes past the content boundary"
+        );
+    }
+
+    #[test]
+    fn diff_keeps_styled_blank_cells() {
+        use ratatui_core::style::{Color, Style};
+        let f1 = make_frame(&["hello world"]);
+        let mut f2 = make_frame(&["hi         "]);
+        // A styled blank cell (e.g. highlighted padding) must be painted,
+        // and the erase may only cover what lies right of it.
+        f2.buffer[(5, 0)].set_style(Style::default().bg(Color::Blue));
+        let diff = f2.diff(&f1);
+        assert!(
+            diff.cells
+                .iter()
+                .any(|(x, _, c)| *x == 5 && c.symbol() == " "),
+            "styled blank is written"
+        );
+        assert!(diff.line_clears.iter().all(|&(x, _)| x > 5));
     }
 
     #[test]
@@ -243,8 +357,9 @@ mod tests {
         let f2 = make_frame(&["hello"]);
         let diff = f2.diff(&f1);
         assert!(!diff.grew());
-        // The removed row should show as changed (cleared to empty)
-        let removed_row_cells: Vec<_> = diff.cells.iter().filter(|(_, y, _)| *y == 1).collect();
-        assert!(!removed_row_cells.is_empty());
+        // The removed row is cleared with a single erase-to-end-of-line
+        // from column 0, not a run of written spaces.
+        assert!(diff.cells.iter().all(|(_, y, _)| *y != 1));
+        assert_eq!(diff.line_clears, vec![(0, 1)]);
     }
 }

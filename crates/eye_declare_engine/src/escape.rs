@@ -50,18 +50,43 @@ impl Diff {
     /// end — the caller is responsible for positioning and showing the
     /// cursor afterward (e.g., at the focused input's cursor position).
     pub fn to_escape_sequences(&self, cursor: &mut CursorState) -> Vec<u8> {
-        if self.cells.is_empty() {
+        if self.cells.is_empty() && self.line_clears.is_empty() {
             return Vec::new();
         }
 
-        let mut out = Vec::with_capacity(self.cells.len() * 12);
+        let mut out = Vec::with_capacity(self.cells.len() * 12 + self.line_clears.len() * 8);
 
         // Begin synchronized update + hide cursor
         out.extend_from_slice(BSU);
         out.extend_from_slice(HIDE_CURSOR);
 
-        // Cells are already in (y, x) order from Buffer::diff's row-major iteration.
+        // Cells and line clears are each in (y, x) order; a row's clear
+        // anchor lies at or right of every kept cell on that row, so the
+        // merge below emits it after the row's cells.
+        let mut clears = self.line_clears.iter().peekable();
+        let write_clear = |out: &mut Vec<u8>, cursor: &mut CursorState, x: u16, y: u16| {
+            if cursor.row != y || cursor.col != x {
+                write_relative_move(out, cursor, y, x);
+            }
+            // EL fills with the current background (BCE); reset first so
+            // the erased cells are genuinely empty.
+            if cursor.style != Style::default() {
+                out.extend_from_slice(b"\x1b[0m");
+                cursor.style = Style::default();
+            }
+            out.extend_from_slice(b"\x1b[K");
+        };
+
         for (x, y, cell) in &self.cells {
+            while let Some(&&(cx, cy)) = clears.peek() {
+                if (cy, cx) < (*y, *x) {
+                    write_clear(&mut out, cursor, cx, cy);
+                    clears.next();
+                } else {
+                    break;
+                }
+            }
+
             let target_row = *y;
             let target_col = *x;
 
@@ -83,6 +108,9 @@ impl Diff {
             // Advance cursor column by the symbol's display width
             let width = unicode_display_width(symbol);
             cursor.col = cursor.col.saturating_add(width as u16);
+        }
+        for &(cx, cy) in clears {
+            write_clear(&mut out, cursor, cx, cy);
         }
 
         // Reset style so we don't leak into terminal
@@ -152,9 +180,14 @@ pub fn write_committed_row<'a>(
     cursor.col = 0;
 
     let cells: Vec<&Cell> = cells.into_iter().collect();
+    // Note `Cell::default().style()`, not `Style::default()`: a cell
+    // reports explicit `Reset` colors, which the bare style never
+    // equals — comparing against the wrong one keeps every trailing
+    // blank and streams full-width rows into scrollback.
+    let blank_style = Cell::default().style();
     let mut last_nonblank = None;
     for (i, cell) in cells.iter().enumerate() {
-        if cell.symbol() != " " || cell.style() != Style::default() {
+        if cell.symbol() != " " || cell.style() != blank_style {
             last_nonblank = Some(i);
         }
     }
@@ -410,6 +443,7 @@ mod tests {
     fn empty_diff_produces_no_output() {
         let diff = Diff {
             cells: vec![],
+            line_clears: vec![],
             new_area: Rect::new(0, 0, 5, 1),
             prev_area: Rect::new(0, 0, 5, 1),
         };
