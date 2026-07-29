@@ -99,6 +99,13 @@ impl TextAreaState {
     }
 
     fn insert_char(&mut self, c: char) {
+        // Control characters reach here only by accident — a terminal
+        // reply (cursor report, mode response) racing the input parser,
+        // or one embedded in a paste. Rendering them would corrupt the
+        // painted row.
+        if c.is_control() {
+            return;
+        }
         let line = &mut self.lines[self.line];
         let at = byte_at(line, self.col);
         line.insert(at, c);
@@ -108,8 +115,16 @@ impl TextAreaState {
         self.col = grapheme_count(&line[..at + c.len_utf8()]);
     }
 
-    /// Insert text at the cursor; newlines split lines.
+    /// Insert text at the cursor; newlines split lines. Control
+    /// characters other than `\n` and `\t` are dropped (see
+    /// `insert_char`).
     pub fn insert_str(&mut self, s: &str) {
+        let keep = |c: char| !c.is_control() || c == '\n' || c == '\t';
+        let s: std::borrow::Cow<'_, str> = if s.chars().all(keep) {
+            s.into()
+        } else {
+            s.chars().filter(|&c| keep(c)).collect::<String>().into()
+        };
         for (i, part) in s.split('\n').enumerate() {
             if i > 0 {
                 self.insert_newline();
