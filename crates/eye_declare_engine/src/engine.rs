@@ -3,7 +3,7 @@
 
 use ratatui_core::buffer::Buffer;
 
-use crate::escape::CursorState;
+use crate::escape::{CursorState, CursorStyle};
 use crate::frame::Frame;
 
 /// Synchronizes rendered frames with a real terminal.
@@ -31,6 +31,11 @@ pub struct Engine {
     /// [`position_cursor`](Engine::position_cursor): a parked cursor
     /// makes a resize-time position report the region top directly.
     parked: bool,
+    /// The shape the app wants the hardware cursor to have.
+    requested_style: CursorStyle,
+    /// The shape last emitted to the terminal, so unchanged shapes cost
+    /// zero bytes per present.
+    emitted_style: CursorStyle,
     /// Set by the resize resets: the screen row the erased region starts
     /// at (`None` when unknown). The next present is a repaint of
     /// content that was *already on screen* — it must not stream
@@ -52,8 +57,24 @@ impl Engine {
             prev_frame: None,
             emitted_rows: 0,
             terminal_height,
+            requested_style: CursorStyle::DefaultUserShape,
+            emitted_style: CursorStyle::DefaultUserShape,
             parked: false,
             resumed_at: None,
+        }
+    }
+
+    /// Request a hardware cursor shape; the change is emitted with the next
+    /// present. Shape state survives resizes and resets — the terminal's
+    /// cursor shape is global, untouched by erasing content.
+    pub fn set_cursor_style(&mut self, style: CursorStyle) {
+        self.requested_style = style;
+    }
+
+    fn emit_cursor_style(&mut self, output: &mut Vec<u8>) {
+        if self.requested_style != self.emitted_style {
+            output.extend_from_slice(self.requested_style.decscusr());
+            self.emitted_style = self.requested_style;
         }
     }
 
@@ -165,8 +186,13 @@ impl Engine {
         // First render
         if self.prev_frame.is_none() {
             if new_height == 0 {
+                // Nothing to paint or position, but a requested shape must
+                // still reach the terminal: this can be the only present an
+                // init-exiting app ever makes.
+                let mut output = Vec::new();
+                self.emit_cursor_style(&mut output);
                 self.prev_frame = Some(new_frame);
-                return Vec::new();
+                return output;
             }
 
             if self.resumed_at.is_some() {
@@ -610,6 +636,7 @@ impl Engine {
         hint: Option<(u16, u16)>,
         park_hidden: bool,
     ) {
+        self.emit_cursor_style(output);
         if let Some((col, row)) = hint {
             crate::escape::write_relative_move(output, &mut self.cursor, row, col);
             // Show cursor at the component's cursor position
@@ -639,6 +666,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::escape::CursorStyle;
     use ratatui_core::layout::Rect;
 
     fn buffer_with_lines(width: u16, lines: &[&str]) -> Buffer {
@@ -653,6 +681,43 @@ mod tests {
             );
         }
         buf
+    }
+
+    #[test]
+    fn cursor_style_emits_on_a_first_zero_height_present() {
+        // An app that sets a shape and exits from init presents exactly one
+        // frame: an empty one. The shape must still reach the terminal.
+        let mut engine = Engine::new(10, 24);
+        engine.set_cursor_style(CursorStyle::SteadyBar);
+        let bytes = engine.present(Frame::new(Buffer::empty(Rect::new(0, 0, 10, 0))), None);
+        assert!(
+            bytes.windows(5).any(|w| w == b"\x1b[6 q"),
+            "DECSCUSR must be emitted even when the frame is empty"
+        );
+    }
+
+    #[test]
+    fn cursor_style_emits_when_the_tail_shrinks_to_zero() {
+        // The exit flow: content presented, then a final empty tail carrying
+        // the shell-handoff shape.
+        let mut engine = Engine::new(10, 24);
+        let _ = engine.present(Frame::new(buffer_with_lines(10, &["hello"])), None);
+        engine.set_cursor_style(CursorStyle::DefaultUserShape);
+        // Default == default: no change, no emission.
+        let bytes = engine.present(Frame::new(Buffer::empty(Rect::new(0, 0, 10, 0))), None);
+        assert!(
+            !bytes.windows(2).any(|w| w == b" q"),
+            "unchanged shape must not re-emit DECSCUSR"
+        );
+
+        let mut engine = Engine::new(10, 24);
+        let _ = engine.present(Frame::new(buffer_with_lines(10, &["hello"])), None);
+        engine.set_cursor_style(CursorStyle::BlinkingBar);
+        let bytes = engine.present(Frame::new(Buffer::empty(Rect::new(0, 0, 10, 0))), None);
+        assert!(
+            bytes.windows(5).any(|w| w == b"\x1b[5 q"),
+            "shape change must ride the final empty present"
+        );
     }
 
     #[test]

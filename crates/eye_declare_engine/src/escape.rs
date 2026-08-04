@@ -13,6 +13,41 @@ const HIDE_CURSOR: &[u8] = b"\x1b[?25l";
 #[allow(dead_code)]
 const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
 
+/// Hardware cursor shape, emitted as DECSCUSR (`CSI n SP q`).
+///
+/// The engine emits a shape change with the next
+/// [`present`](crate::Engine::present); it never resets the shape at
+/// teardown — an app that changes shapes and wants the user's default back
+/// on exit presents `DefaultUserShape` (or its final shape of choice)
+/// before exiting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum CursorStyle {
+    #[default]
+    DefaultUserShape,
+    BlinkingBlock,
+    SteadyBlock,
+    BlinkingUnderScore,
+    SteadyUnderScore,
+    BlinkingBar,
+    SteadyBar,
+}
+
+impl CursorStyle {
+    /// The DECSCUSR parameter for this shape.
+    pub(crate) fn decscusr(self) -> &'static [u8] {
+        match self {
+            CursorStyle::DefaultUserShape => b"\x1b[0 q",
+            CursorStyle::BlinkingBlock => b"\x1b[1 q",
+            CursorStyle::SteadyBlock => b"\x1b[2 q",
+            CursorStyle::BlinkingUnderScore => b"\x1b[3 q",
+            CursorStyle::SteadyUnderScore => b"\x1b[4 q",
+            CursorStyle::BlinkingBar => b"\x1b[5 q",
+            CursorStyle::SteadyBar => b"\x1b[6 q",
+        }
+    }
+}
+
 /// Tracks terminal cursor position and current style to minimize output.
 #[derive(Debug, Clone)]
 pub struct CursorState {

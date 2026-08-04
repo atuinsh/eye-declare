@@ -47,7 +47,19 @@ where
             exit: None,
         };
         app.init(&mut ctx);
-        let init_exit = ctx.exit;
+        let mut init_exit = ctx.exit;
+        if init_exit.is_none()
+            && let Some(msg) = app.on_resize(width, terminal_height)
+        {
+            let mut ctx = Ctx {
+                timeline: &mut timeline,
+                output: &mut pending,
+                effects: &mut effects,
+                exit: None,
+            };
+            app.update(msg, &mut ctx);
+            init_exit = ctx.exit;
+        }
         Self {
             app,
             timeline,
@@ -104,15 +116,8 @@ where
         let mut bytes = std::mem::take(&mut self.pending);
         let mut exit = None;
         for msg in msgs {
-            let mut ctx = Ctx {
-                timeline: &mut self.timeline,
-                output: &mut bytes,
-                effects: &mut self.effects,
-                exit: None,
-            };
-            self.app.update(msg, &mut ctx);
-            if let Some(output) = ctx.exit {
-                exit = Some(output);
+            exit = self.apply_msg(msg, &mut bytes);
+            if exit.is_some() {
                 break;
             }
         }
@@ -124,6 +129,19 @@ where
         (bytes, exit)
     }
 
+    /// Run one message through `update`, collecting pushed-block bytes into
+    /// `bytes` and queued effects into the runtime. No present.
+    fn apply_msg(&mut self, msg: A::Msg, bytes: &mut Vec<u8>) -> Option<A::Output> {
+        let mut ctx = Ctx {
+            timeline: &mut self.timeline,
+            output: bytes,
+            effects: &mut self.effects,
+            exit: None,
+        };
+        self.app.update(msg, &mut ctx);
+        ctx.exit
+    }
+
     /// Effects queued by `update` (spawned streams), for the driver to
     /// execute. Drain after every [`handle`](Runtime::handle) /
     /// [`process`](Runtime::process).
@@ -133,6 +151,7 @@ where
 
     /// Re-present the live tail (also called on animation ticks).
     pub fn present(&mut self) -> Vec<u8> {
+        self.timeline.set_cursor_style(self.app.cursor_style());
         let tail = self.app.tail();
         self.animate = tail.animated();
         let mut bytes = std::mem::take(&mut self.pending);
@@ -174,6 +193,62 @@ where
         bytes
     }
 
+    /// [`resize_anchored`](Runtime::resize_anchored), plus
+    /// [`App::on_resize`] delivery: the size message (if any) runs through
+    /// `update` after the region reset and before the single repaint, so
+    /// the new frame is laid out at the new size. Returns the app's output
+    /// if the update exited.
+    ///
+    /// `cursor` is the post-reflow cursor position report when available
+    /// (preferred); `None` falls back to stale-arithmetic erase.
+    pub fn resize_msg(
+        &mut self,
+        width: u16,
+        terminal_height: u16,
+        cursor: Option<(u16, u16)>,
+    ) -> (Vec<u8>, Option<A::Output>) {
+        self.timeline.set_terminal_height(terminal_height);
+        let mut bytes = match cursor {
+            Some(pos) => self.timeline.resize_anchored(width, pos),
+            None => self.timeline.resize(width),
+        };
+        let exit = self.deliver_resize(width, terminal_height, &mut bytes);
+        bytes.extend_from_slice(&self.present());
+        if exit.is_some() {
+            bytes.extend_from_slice(&self.timeline.finalize());
+        }
+        (bytes, exit)
+    }
+
+    /// Resize for alt-screen (fullscreen) apps: clear the visible screen
+    /// and repaint, with [`App::on_resize`] delivered in between. There is
+    /// no committed content to preserve and no scrollback to protect, so
+    /// no cursor report is needed.
+    pub fn resize_screen(
+        &mut self,
+        width: u16,
+        terminal_height: u16,
+    ) -> (Vec<u8>, Option<A::Output>) {
+        self.timeline.set_terminal_height(terminal_height);
+        let mut bytes = self.timeline.reset_screen(width);
+        let exit = self.deliver_resize(width, terminal_height, &mut bytes);
+        bytes.extend_from_slice(&self.present());
+        if exit.is_some() {
+            bytes.extend_from_slice(&self.timeline.finalize());
+        }
+        (bytes, exit)
+    }
+
+    fn deliver_resize(
+        &mut self,
+        width: u16,
+        terminal_height: u16,
+        bytes: &mut Vec<u8>,
+    ) -> Option<A::Output> {
+        let msg = self.app.on_resize(width, terminal_height)?;
+        self.apply_msg(msg, bytes)
+    }
+
     /// Shell handoff for exits that bypass the message loop: park the
     /// cursor at column 0 below the content. Message-driven exits get
     /// this automatically from [`process_batch`](Runtime::process_batch);
@@ -201,6 +276,30 @@ pub enum KeyboardProtocol {
     /// Disambiguates modified keys (Shift+Enter) in supporting terminals
     /// (kitty, WezTerm, foot, Ghostty, Windows Terminal, …).
     Enhanced,
+    /// Push an explicit kitty flag set. With `probe: true` the terminal is
+    /// asked first (one query round-trip) and unsupporting terminals fall
+    /// back to legacy; with `probe: false` the flags are pushed blind —
+    /// no round-trip, and terminals that ignore the protocol ignore the
+    /// push (the pop at teardown is equally ignored).
+    Custom {
+        flags: crossterm::event::KeyboardEnhancementFlags,
+        probe: bool,
+    },
+}
+
+/// Which screen the interactive drivers run on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScreenMode {
+    /// The main screen: the region starts at the shell prompt, committed
+    /// blocks flow into scrollback (the timeline model). The default.
+    #[default]
+    Inline,
+    /// The alternate screen: fullscreen apps. The prior screen contents
+    /// are restored at teardown, resizes clear-and-repaint (no cursor
+    /// position query), and startup skips the start-column query — the
+    /// cursor is homed explicitly. Committed blocks are of limited use
+    /// here: they scroll away within the alt screen and vanish with it.
+    AltScreen,
 }
 
 /// Terminal options for the interactive drivers ([`run_with`],
@@ -212,11 +311,17 @@ pub enum KeyboardProtocol {
 #[non_exhaustive]
 pub struct RunOptions {
     pub keyboard: KeyboardProtocol,
+    pub screen: ScreenMode,
 }
 
 impl RunOptions {
     pub fn keyboard(mut self, protocol: KeyboardProtocol) -> Self {
         self.keyboard = protocol;
+        self
+    }
+
+    pub fn screen(mut self, screen: ScreenMode) -> Self {
+        self.screen = screen;
         self
     }
 }
@@ -242,8 +347,10 @@ where
     let mut runtime = Runtime::new(app, width, height);
     let mut stdout = io::stdout().lock();
 
-    let _guard = RawModeGuard::enable(options.keyboard)?;
-    normalize_start_column();
+    let _guard = RawModeGuard::enable(options.keyboard, options.screen)?;
+    if options.screen != ScreenMode::AltScreen {
+        normalize_start_column();
+    }
 
     let (bytes, init_exit) = runtime.startup();
     stdout.write_all(&bytes)?;
@@ -319,7 +426,15 @@ where
                         stdout.flush()?;
                         return Ok(output);
                     }
-                    bytes.extend_from_slice(&resize_with_report(&mut runtime, w, h));
+                    let (resize_bytes, resize_exit) =
+                        resize_with_report(&mut runtime, w, h, options.screen);
+                    reject_effects(&mut runtime)?;
+                    bytes.extend_from_slice(&resize_bytes);
+                    if let Some(output) = resize_exit {
+                        stdout.write_all(&bytes)?;
+                        stdout.flush()?;
+                        return Ok(output);
+                    }
                     bytes
                 }
                 _ => Vec::new(),
@@ -390,20 +505,29 @@ pub(crate) fn normalize_start_column() {
 /// Resize re-anchored by a fresh cursor position report — the terminal
 /// has already reflowed by the time the resize event arrives, so the
 /// report is post-reflow ground truth. Falls back to stale-arithmetic
-/// [`Runtime::resize`] if the terminal doesn't answer.
+/// erase if the terminal doesn't answer. On the alt screen there is
+/// nothing to anchor: clear and repaint, no query.
 ///
 /// The event's dimensions may be stale during a drag (events queue while
 /// the terminal keeps resizing); painting at a stale width soft-wraps
 /// for real and corrupts row tracking, so re-query the current size and
 /// prefer it.
-pub(crate) fn resize_with_report<A: App>(runtime: &mut Runtime<A>, w: u16, h: u16) -> Vec<u8>
+pub(crate) fn resize_with_report<A: App>(
+    runtime: &mut Runtime<A>,
+    w: u16,
+    h: u16,
+    screen: ScreenMode,
+) -> (Vec<u8>, Option<A::Output>)
 where
     A::Msg: Clone,
 {
     let (w, h) = crossterm::terminal::size().unwrap_or((w, h));
-    match read_cursor_position() {
-        Ok(pos) => runtime.resize_anchored(w, h, pos),
-        Err(_) => runtime.resize(w, h),
+    match screen {
+        ScreenMode::AltScreen => runtime.resize_screen(w, h),
+        ScreenMode::Inline => {
+            let cursor = read_cursor_position().ok();
+            runtime.resize_msg(w, h, cursor)
+        }
     }
 }
 
@@ -428,35 +552,66 @@ where
     Ok(())
 }
 
+/// The kitty flags to push for a protocol choice, or `None` for legacy.
+/// Pure so the probe/blind/fallback logic is unit-testable.
+fn keyboard_flags_to_push(
+    keyboard: KeyboardProtocol,
+    terminal_supports: impl FnOnce() -> bool,
+) -> Option<crossterm::event::KeyboardEnhancementFlags> {
+    match keyboard {
+        KeyboardProtocol::Legacy => None,
+        // Disambiguation only: it's all Shift+Enter detection needs.
+        // REPORT_EVENT_TYPES would add key-release events, which the
+        // built-in drivers filter but a custom driver feeding
+        // Runtime::handle directly could easily double-dispatch.
+        KeyboardProtocol::Enhanced => terminal_supports()
+            .then_some(crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES),
+        KeyboardProtocol::Custom { flags, probe } => {
+            (!probe || terminal_supports()).then_some(flags)
+        }
+    }
+}
+
 /// Restores the terminal on drop, including panic unwind.
 pub(crate) struct RawModeGuard {
     keyboard_enhanced: bool,
+    alt_screen: bool,
 }
 
 impl RawModeGuard {
-    pub(crate) fn enable(keyboard: KeyboardProtocol) -> io::Result<Self> {
+    pub(crate) fn enable(keyboard: KeyboardProtocol, screen: ScreenMode) -> io::Result<Self> {
         crossterm::terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
+
+        let alt_screen = screen == ScreenMode::AltScreen;
+        if alt_screen {
+            let _ = crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen);
+            // The alt screen starts blank but the cursor position is
+            // whatever the terminal felt like; home it so the engine's
+            // (0,0) origin assumption holds without a position query.
+            let _ = stdout.write_all(b"\x1b[2J\x1b[H");
+            let _ = stdout.flush();
+        }
+
         let _ = crossterm::execute!(stdout, crossterm::event::EnableBracketedPaste);
 
-        // Only push if the terminal supports it — the silent-fallback
+        // Only probe when the protocol asks for it — the silent-fallback
         // contract of KeyboardProtocol::Enhanced.
-        let keyboard_enhanced = keyboard == KeyboardProtocol::Enhanced
-            && crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
-        if keyboard_enhanced {
-            // Disambiguation only: it's all Shift+Enter detection needs.
-            // REPORT_EVENT_TYPES would add key-release events, which the
-            // built-in drivers filter but a custom driver feeding
-            // Runtime::handle directly could easily double-dispatch.
+        let flags = keyboard_flags_to_push(keyboard, || {
+            crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
+        });
+        let keyboard_enhanced = flags.is_some();
+        if let Some(flags) = flags {
             let _ = crossterm::execute!(
                 stdout,
-                crossterm::event::PushKeyboardEnhancementFlags(
-                    crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                )
+                crossterm::event::PushKeyboardEnhancementFlags(flags)
             );
         }
 
-        Ok(Self { keyboard_enhanced })
+        Ok(Self {
+            keyboard_enhanced,
+            alt_screen,
+        })
     }
 }
 
@@ -466,11 +621,68 @@ impl Drop for RawModeGuard {
         if self.keyboard_enhanced {
             let _ = crossterm::execute!(stdout, crossterm::event::PopKeyboardEnhancementFlags);
         }
+        if self.alt_screen {
+            let _ = crossterm::execute!(stdout, crossterm::terminal::LeaveAlternateScreen);
+        }
         let _ = crossterm::execute!(stdout, crossterm::event::DisableBracketedPaste);
         let _ = crossterm::terminal::disable_raw_mode();
         // The engine hides the cursor while no element hints one; make
         // sure the shell gets it back.
         let _ = stdout.write_all(b"\x1b[?25h");
         let _ = stdout.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyboardEnhancementFlags as Flags;
+
+    #[test]
+    fn legacy_pushes_nothing_and_never_probes() {
+        let flags = keyboard_flags_to_push(KeyboardProtocol::Legacy, || {
+            panic!("legacy must not query the terminal")
+        });
+        assert_eq!(flags, None);
+    }
+
+    #[test]
+    fn enhanced_probes_and_falls_back() {
+        assert_eq!(
+            keyboard_flags_to_push(KeyboardProtocol::Enhanced, || true),
+            Some(Flags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+        assert_eq!(
+            keyboard_flags_to_push(KeyboardProtocol::Enhanced, || false),
+            None
+        );
+    }
+
+    #[test]
+    fn custom_blind_push_skips_the_probe_round_trip() {
+        let flags = Flags::DISAMBIGUATE_ESCAPE_CODES
+            | Flags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            | Flags::REPORT_ALTERNATE_KEYS;
+        let pushed = keyboard_flags_to_push(
+            KeyboardProtocol::Custom {
+                flags,
+                probe: false,
+            },
+            || panic!("blind push must not query the terminal"),
+        );
+        assert_eq!(pushed, Some(flags));
+    }
+
+    #[test]
+    fn custom_with_probe_respects_the_answer() {
+        let flags = Flags::REPORT_ALTERNATE_KEYS;
+        assert_eq!(
+            keyboard_flags_to_push(KeyboardProtocol::Custom { flags, probe: true }, || true),
+            Some(flags)
+        );
+        assert_eq!(
+            keyboard_flags_to_push(KeyboardProtocol::Custom { flags, probe: true }, || false),
+            None
+        );
     }
 }

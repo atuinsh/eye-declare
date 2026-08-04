@@ -36,12 +36,13 @@ pub mod viewport;
 
 pub use app::{App, Ctx};
 pub use element::{AnyElement, Element, ElementExt, Empty, Fluent, Padded, empty};
+pub use eye_declare_engine::escape::CursorStyle;
 pub use focus::{Focus, FocusHandle};
 pub use input::{InputEvent, Key, Keymap, key, keymap};
 #[cfg(feature = "markdown")]
 pub use markdown::{Markdown, MarkdownStyles, markdown};
 pub use panel::{Panel, panel};
-pub use runtime::{KeyboardProtocol, RunOptions, Runtime, run, run_with};
+pub use runtime::{KeyboardProtocol, RunOptions, Runtime, ScreenMode, run, run_with};
 pub use spinner::{Spinner, spinner};
 pub use stack::{Col, Row, Width, col, row};
 pub use subscription::Subscriptions;

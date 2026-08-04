@@ -90,3 +90,22 @@ driver_tokio::run_with(app, options).await?;
 
 `Enhanced` silently falls back to legacy on terminals without support, so
 bind a fallback chord (Ctrl+J is the convention) alongside Shift+Enter.
+
+For full control there is `Custom { flags, probe }`: an explicit kitty
+flag set (e.g. adding `REPORT_ALTERNATE_KEYS` when your keybinding layer
+depends on how modified keys arrive). With `probe: true` the terminal is
+asked first — one query round-trip — and unsupporting terminals fall back
+to legacy. With `probe: false` the flags are pushed blind: no round-trip,
+and terminals that ignore the protocol ignore the push and the matching
+pop at teardown. Blind pushing is the right call when you are matching
+the behavior of an app that always pushed, or when startup latency over
+SSH matters more than tidiness on ancient terminals.
+
+```rust
+use crossterm::event::KeyboardEnhancementFlags as Flags;
+
+let options = RunOptions::default().keyboard(KeyboardProtocol::Custom {
+    flags: Flags::DISAMBIGUATE_ESCAPE_CODES | Flags::REPORT_ALTERNATE_KEYS,
+    probe: false,
+});
+```

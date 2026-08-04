@@ -48,8 +48,10 @@ where
     let (tx, mut rx) = unbounded_channel::<A::Msg>();
     let mut stdout = io::stdout().lock();
 
-    let _guard = RawModeGuard::enable(options.keyboard)?;
-    crate::runtime::normalize_start_column();
+    let _guard = RawModeGuard::enable(options.keyboard, options.screen)?;
+    if options.screen != crate::runtime::ScreenMode::AltScreen {
+        crate::runtime::normalize_start_column();
+    }
 
     let (bytes, init_exit) = runtime.startup();
     stdout.write_all(&bytes)?;
@@ -137,11 +139,14 @@ where
                             }
                         }
                         if exit.is_none() {
-                            bytes.extend_from_slice(&crate::runtime::resize_with_report(
+                            let (resize_bytes, resize_exit) = crate::runtime::resize_with_report(
                                 &mut runtime,
                                 w,
                                 h,
-                            ));
+                                options.screen,
+                            );
+                            bytes.extend_from_slice(&resize_bytes);
+                            exit = resize_exit;
                         }
                         (bytes, exit)
                     }
