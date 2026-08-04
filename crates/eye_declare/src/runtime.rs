@@ -661,6 +661,22 @@ impl Drop for RawModeGuard {
         }
         if self.mouse_capture {
             let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
+            // The terminal keeps sending reports until it processes the
+            // disable; anything already queued (a fast wheel queues dozens,
+            // possibly the very events that triggered the exit) would land
+            // in the parent shell's input as escape-sequence garbage — and
+            // has been seen to wedge fragile emulators outright. Drain
+            // until quiet, bounded, while raw mode is still on. Costs up to
+            // 50ms at teardown, only for capture-enabled apps.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+            while std::time::Instant::now() < deadline
+                && matches!(
+                    crossterm::event::poll(std::time::Duration::from_millis(5)),
+                    Ok(true)
+                )
+            {
+                let _ = crossterm::event::read();
+            }
         }
         if self.alt_screen {
             let _ = crossterm::execute!(stdout, crossterm::terminal::LeaveAlternateScreen);
