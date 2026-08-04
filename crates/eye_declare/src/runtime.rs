@@ -312,6 +312,7 @@ pub enum ScreenMode {
 pub struct RunOptions {
     pub keyboard: KeyboardProtocol,
     pub screen: ScreenMode,
+    pub mouse_capture: bool,
 }
 
 impl RunOptions {
@@ -322,6 +323,15 @@ impl RunOptions {
 
     pub fn screen(mut self, screen: ScreenMode) -> Self {
         self.screen = screen;
+        self
+    }
+
+    /// Capture mouse events and deliver them as [`InputEvent::Mouse`]
+    /// through the keymap fallthrough. Off by default: capture takes over
+    /// the terminal's native selection/copy behavior, so only apps that
+    /// actually handle mouse events should request it.
+    pub fn mouse_capture(mut self, capture: bool) -> Self {
+        self.mouse_capture = capture;
         self
     }
 }
@@ -347,7 +357,7 @@ where
     let mut runtime = Runtime::new(app, width, height);
     let mut stdout = io::stdout().lock();
 
-    let _guard = RawModeGuard::enable(options.keyboard, options.screen)?;
+    let _guard = RawModeGuard::enable(options.keyboard, options.screen, options.mouse_capture)?;
     if options.screen != ScreenMode::AltScreen {
         normalize_start_column();
     }
@@ -380,6 +390,16 @@ where
                 }
                 Event::Paste(s) => {
                     let (bytes, exit) = runtime.handle(InputEvent::Paste(s));
+                    reject_effects(&mut runtime)?;
+                    if let Some(output) = exit {
+                        stdout.write_all(&bytes)?;
+                        stdout.flush()?;
+                        return Ok(output);
+                    }
+                    bytes
+                }
+                Event::Mouse(m) => {
+                    let (bytes, exit) = runtime.handle(InputEvent::Mouse(m));
                     reject_effects(&mut runtime)?;
                     if let Some(output) = exit {
                         stdout.write_all(&bytes)?;
@@ -576,10 +596,15 @@ fn keyboard_flags_to_push(
 pub(crate) struct RawModeGuard {
     keyboard_enhanced: bool,
     alt_screen: bool,
+    mouse_capture: bool,
 }
 
 impl RawModeGuard {
-    pub(crate) fn enable(keyboard: KeyboardProtocol, screen: ScreenMode) -> io::Result<Self> {
+    pub(crate) fn enable(
+        keyboard: KeyboardProtocol,
+        screen: ScreenMode,
+        mouse_capture: bool,
+    ) -> io::Result<Self> {
         crossterm::terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
 
@@ -594,6 +619,9 @@ impl RawModeGuard {
         }
 
         let _ = crossterm::execute!(stdout, crossterm::event::EnableBracketedPaste);
+        if mouse_capture {
+            let _ = crossterm::execute!(stdout, crossterm::event::EnableMouseCapture);
+        }
 
         // Only probe when the protocol asks for it — the silent-fallback
         // contract of KeyboardProtocol::Enhanced.
@@ -611,6 +639,7 @@ impl RawModeGuard {
         Ok(Self {
             keyboard_enhanced,
             alt_screen,
+            mouse_capture,
         })
     }
 }
@@ -620,6 +649,9 @@ impl Drop for RawModeGuard {
         let mut stdout = io::stdout();
         if self.keyboard_enhanced {
             let _ = crossterm::execute!(stdout, crossterm::event::PopKeyboardEnhancementFlags);
+        }
+        if self.mouse_capture {
+            let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
         }
         if self.alt_screen {
             let _ = crossterm::execute!(stdout, crossterm::terminal::LeaveAlternateScreen);

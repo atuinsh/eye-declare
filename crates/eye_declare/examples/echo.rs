@@ -80,6 +80,7 @@ impl App for Echo {
                     _ => Msg::Typed(' '),
                 },
                 InputEvent::Paste(s) => Msg::Typed(s.chars().next().unwrap_or(' ')),
+                _ => Msg::Typed(' '),
             })
     }
 }

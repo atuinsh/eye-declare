@@ -84,6 +84,7 @@ impl App for Echo {
                     _ => Msg::Typed('?'),
                 },
                 InputEvent::Paste(_) => Msg::Typed('P'),
+                _ => Msg::Typed('?'),
             })
     }
 }

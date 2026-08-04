@@ -95,6 +95,8 @@ impl TextAreaState {
                 }
             }
             InputEvent::Paste(s) => self.insert_str(s),
+            // Mouse (and future event kinds): not editing input.
+            _ => {}
         }
     }
 

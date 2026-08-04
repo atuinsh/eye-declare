@@ -48,7 +48,7 @@ where
     let (tx, mut rx) = unbounded_channel::<A::Msg>();
     let mut stdout = io::stdout().lock();
 
-    let _guard = RawModeGuard::enable(options.keyboard, options.screen)?;
+    let _guard = RawModeGuard::enable(options.keyboard, options.screen, options.mouse_capture)?;
     if options.screen != crate::runtime::ScreenMode::AltScreen {
         crate::runtime::normalize_start_column();
     }
@@ -81,6 +81,7 @@ where
                         runtime.handle(InputEvent::Key(k))
                     }
                     Some(Ok(Event::Paste(s))) => runtime.handle(InputEvent::Paste(s)),
+                    Some(Ok(Event::Mouse(m))) => runtime.handle(InputEvent::Mouse(m)),
                     // Coalesce resize storms: a drag delivers events
                     // faster than an erase + repaint + cursor query per
                     // event can keep up, which queues stale sizes and
