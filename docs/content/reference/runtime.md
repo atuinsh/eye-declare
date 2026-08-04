@@ -36,12 +36,52 @@ restore the terminal on exit, including panic unwind.
 
 ## RunOptions
 
-| option     | values                                            | notes                                                                                                                                          |
-| ---------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `keyboard` | `KeyboardProtocol::Legacy` (default) / `Enhanced` | `Enhanced` requests the kitty protocol's disambiguated escape codes (Shift+Enter vs Enter), falling back to legacy silently where unsupported. |
+| option     | values                                                                     | notes                                                                                                                                                                             |
+| ---------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `keyboard` | `KeyboardProtocol::Legacy` (default) / `Enhanced` / `Custom { flags, probe }` | `Enhanced` requests the kitty protocol's disambiguated escape codes (Shift+Enter vs Enter), falling back to legacy silently where unsupported. `Custom` pushes an explicit flag set; see [input](../../guide/input/). |
+| `screen`   | `ScreenMode::Inline` (default) / `AltScreen`                                | Where the app runs: the main screen (the timeline model), or the alternate screen for fullscreen apps.                                                                             |
 
 The struct is `#[non_exhaustive]`; construct with `Default` and the
 setters.
+
+## Fullscreen: the alt screen
+
+`ScreenMode::AltScreen` runs the app on the alternate screen — for
+"whole terminal" TUIs rather than inline ones. What changes:
+
+- The prior screen contents are restored at teardown, like any fullscreen
+  program.
+- Startup homes the cursor explicitly instead of querying the start
+  column, and resizes clear-and-repaint instead of anchoring on a cursor
+  report — fullscreen startup and resizes cost **zero** position-query
+  round-trips.
+- Size the tail to the terminal with [`App::on_resize`](#sizes-and-resizes):
+  a fullscreen tail should fill exactly the height it is told about.
+- `ctx.push` still works but is of limited use: committed blocks scroll
+  away within the alt screen and vanish with it. The timeline model is an
+  inline-mode idea.
+
+## Sizes and resizes
+
+`App::on_resize(width, height) -> Option<Msg>` turns the terminal size
+into a model input. It is called with the initial size during
+`Runtime::new` and with the new size after every resize, before the
+accompanying repaint — return a message and the frame that follows is
+laid out with the size already in the model. The default returns `None`:
+apps whose tails size themselves from content never need it.
+
+This is how a fixed-height or fullscreen tail tracks the terminal;
+content-sized inline tails should ignore it and keep measuring naturally.
+
+## Cursor shape
+
+`App::cursor_style() -> CursorStyle` is re-derived from the model at
+every present, like `keymap()`: return the shape for the current mode
+(`SteadyBlock` in a vim-normal mode, `BlinkingBar` in insert, …) and the
+engine emits the change — only the change — as DECSCUSR. There is no
+teardown reset: the terminal keeps the last shape presented, so an app
+that changes shapes should end on the one it means to leave behind
+(usually `CursorStyle::DefaultUserShape`).
 
 ## Runtime: the headless core
 
@@ -55,10 +95,14 @@ let (bytes, exit) = rt.handle(input_event);     // keymap → update → present
 let (bytes, exit) = rt.process(msg);            // update → present
 let (bytes, exit) = rt.process_batch(msgs);     // many updates, one present
 let bytes = rt.present();                        // re-present (animation tick)
-let bytes = rt.resize(w, h);
+let (bytes, exit) = rt.resize_msg(w, h, cursor); // inline resize + on_resize delivery
+let (bytes, exit) = rt.resize_screen(w, h);      // alt-screen resize + on_resize delivery
 let effects = rt.take_effects();                 // spawned work, for the driver
 let interval = rt.animation_interval();          // Some(_) while tail animates
 ```
+
+(`resize`/`resize_anchored` remain for compatibility; they repaint but do
+not deliver `App::on_resize`.)
 
 This is the surface for [headless testing](../../guide/testing/) and for
 custom drivers (another executor, a remote terminal, an event-sourced
@@ -78,6 +122,8 @@ impl App for MyApp {
     fn tail(&self) -> impl Element + '_;
     fn keymap(&self) -> Keymap<Msg>;               // optional: default empty
     fn subscriptions(&self) -> Subscriptions<Msg>; // optional: default none
+    fn on_resize(&self, w: u16, h: u16) -> Option<Msg>; // optional: default None
+    fn cursor_style(&self) -> CursorStyle;         // optional: default user shape
 }
 ```
 
