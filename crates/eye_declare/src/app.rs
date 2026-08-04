@@ -1,6 +1,7 @@
 //! The application contract: Elm-shaped, with the timeline as the effect
 //! boundary.
 
+use eye_declare_engine::escape::CursorStyle;
 use futures_core::Stream;
 
 use crate::element::Element;
@@ -45,6 +46,24 @@ pub trait App: Sized {
     /// driver.
     fn subscriptions(&self) -> Subscriptions<Self::Msg> {
         Subscriptions::new()
+    }
+
+    /// The hardware cursor shape, re-derived from the model each present
+    /// (like [`keymap`](App::keymap)): return the shape for the current
+    /// mode and the runtime emits changes as DECSCUSR. The shape is never
+    /// reset at teardown — an app that changes shapes should end on the
+    /// shape it wants to leave behind (usually `DefaultUserShape`).
+    fn cursor_style(&self) -> CursorStyle {
+        CursorStyle::DefaultUserShape
+    }
+
+    /// Called with the terminal dimensions at startup and after every
+    /// resize, before the accompanying repaint: return a message to feed
+    /// the new size into the model (e.g. to size a fixed-height tail).
+    /// Default: `None`, sizes are ignored.
+    fn on_resize(&self, width: u16, height: u16) -> Option<Self::Msg> {
+        let _ = (width, height);
+        None
     }
 }
 

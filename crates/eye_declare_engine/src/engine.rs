@@ -3,7 +3,7 @@
 
 use ratatui_core::buffer::Buffer;
 
-use crate::escape::CursorState;
+use crate::escape::{CursorState, CursorStyle};
 use crate::frame::Frame;
 
 /// Synchronizes rendered frames with a real terminal.
@@ -31,6 +31,11 @@ pub struct Engine {
     /// [`position_cursor`](Engine::position_cursor): a parked cursor
     /// makes a resize-time position report the region top directly.
     parked: bool,
+    /// The shape the app wants the hardware cursor to have.
+    requested_style: CursorStyle,
+    /// The shape last emitted to the terminal, so unchanged shapes cost
+    /// zero bytes per present.
+    emitted_style: CursorStyle,
     /// Set by the resize resets: the screen row the erased region starts
     /// at (`None` when unknown). The next present is a repaint of
     /// content that was *already on screen* — it must not stream
@@ -52,9 +57,18 @@ impl Engine {
             prev_frame: None,
             emitted_rows: 0,
             terminal_height,
+            requested_style: CursorStyle::DefaultUserShape,
+            emitted_style: CursorStyle::DefaultUserShape,
             parked: false,
             resumed_at: None,
         }
+    }
+
+    /// Request a hardware cursor shape; the change is emitted with the next
+    /// present. Shape state survives resizes and resets — the terminal's
+    /// cursor shape is global, untouched by erasing content.
+    pub fn set_cursor_style(&mut self, style: CursorStyle) {
+        self.requested_style = style;
     }
 
     /// The present after a resize reset: the region was just erased from
@@ -610,6 +624,10 @@ impl Engine {
         hint: Option<(u16, u16)>,
         park_hidden: bool,
     ) {
+        if self.requested_style != self.emitted_style {
+            output.extend_from_slice(self.requested_style.decscusr());
+            self.emitted_style = self.requested_style;
+        }
         if let Some((col, row)) = hint {
             crate::escape::write_relative_move(output, &mut self.cursor, row, col);
             // Show cursor at the component's cursor position

@@ -7,6 +7,7 @@
 //! each frame ends in [`Timeline::present`].
 
 use eye_declare_engine::Engine;
+use eye_declare_engine::escape::CursorStyle;
 use eye_declare_engine::frame::Frame;
 use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect;
@@ -34,6 +35,19 @@ impl Timeline {
 
     pub fn set_terminal_height(&mut self, height: u16) {
         self.engine.set_terminal_height(height);
+    }
+
+    /// Request a hardware cursor shape; emitted with the next
+    /// [`present`](Timeline::present) if it changed.
+    pub fn set_cursor_style(&mut self, style: CursorStyle) {
+        self.engine.set_cursor_style(style);
+    }
+
+    /// Reset for a width change by clearing the visible screen (alt-screen
+    /// semantics: no committed content to preserve, no scrollback to
+    /// protect). Follow with a [`present`](Timeline::present).
+    pub fn reset_screen(&mut self, new_width: u16) -> Vec<u8> {
+        self.engine.reset(new_width)
     }
 
     /// Commit a finished block above the live tail. The block is rendered
