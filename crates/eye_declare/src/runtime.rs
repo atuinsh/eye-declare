@@ -88,10 +88,45 @@ where
     /// message results, processes it. Returns the bytes to write and the
     /// app's output when it exited.
     pub fn handle(&mut self, event: InputEvent) -> (Vec<u8>, Option<A::Output>) {
-        match self.app.keymap().dispatch(&event) {
-            Some(msg) => self.process(msg),
-            None => (Vec::new(), None),
+        self.handle_batch(std::iter::once(event))
+    }
+
+    /// Feed a burst of input events, presenting once at the end — the
+    /// input-side analogue of [`process_batch`](Runtime::process_batch).
+    /// A wheel flick or paste storm that queued dozens of events becomes
+    /// one frame instead of one per event.
+    ///
+    /// Dispatch is interleaved: each event resolves against a freshly
+    /// derived keymap *after* the previous event's update, so a mid-batch
+    /// mode change dispatches the rest of the batch under the new mode.
+    /// Stops early if an update exits; if no event dispatched to a
+    /// message, nothing is presented and no bytes are returned.
+    pub fn handle_batch(
+        &mut self,
+        events: impl IntoIterator<Item = InputEvent>,
+    ) -> (Vec<u8>, Option<A::Output>) {
+        let mut bytes: Option<Vec<u8>> = None;
+        let mut exit = None;
+        for event in events {
+            if let Some(msg) = self.app.keymap().dispatch(&event) {
+                // Undelivered init bytes come first, taken only once a
+                // message actually lands (an all-unmatched batch must
+                // leave them pending, like `handle` always has).
+                let buf = bytes.get_or_insert_with(|| std::mem::take(&mut self.pending));
+                exit = self.apply_msg(msg, buf);
+                if exit.is_some() {
+                    break;
+                }
+            }
         }
+        let Some(mut bytes) = bytes else {
+            return (Vec::new(), None);
+        };
+        bytes.extend_from_slice(&self.present());
+        if exit.is_some() {
+            bytes.extend_from_slice(&self.timeline.finalize());
+        }
+        (bytes, exit)
     }
 
     /// Feed one message (from the keymap, or — in the async driver — from
@@ -377,97 +412,48 @@ where
 
         let bytes = if crossterm::event::poll(timeout)? {
             use crossterm::event::{Event, KeyEventKind};
-            match crossterm::event::read()? {
-                Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
-                    let (bytes, exit) = runtime.handle(InputEvent::Key(k));
-                    reject_effects(&mut runtime)?;
-                    if let Some(output) = exit {
-                        stdout.write_all(&bytes)?;
-                        stdout.flush()?;
-                        return Ok(output);
+            // Coalesce everything already queued into one frame (wheel
+            // flicks and paste storms queue dozens of events; painting
+            // per event reads as lag). Input is processed in order,
+            // resizes collapse into one handled at the latest size.
+            let mut inputs: Vec<InputEvent> = Vec::new();
+            let mut resize: Option<(u16, u16)> = None;
+            let mut first = true;
+            while first || crossterm::event::poll(Duration::ZERO)? {
+                first = false;
+                match crossterm::event::read()? {
+                    Event::Key(k)
+                        if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
+                    {
+                        inputs.push(InputEvent::Key(k));
                     }
-                    bytes
+                    Event::Paste(s) => inputs.push(InputEvent::Paste(s)),
+                    Event::Mouse(m) => inputs.push(InputEvent::Mouse(m)),
+                    Event::Resize(w, h) => resize = Some((w, h)),
+                    _ => {}
                 }
-                Event::Paste(s) => {
-                    let (bytes, exit) = runtime.handle(InputEvent::Paste(s));
-                    reject_effects(&mut runtime)?;
-                    if let Some(output) = exit {
-                        stdout.write_all(&bytes)?;
-                        stdout.flush()?;
-                        return Ok(output);
-                    }
-                    bytes
+                if inputs.len() >= 64 {
+                    break;
                 }
-                Event::Mouse(m) => {
-                    let (bytes, exit) = runtime.handle(InputEvent::Mouse(m));
-                    reject_effects(&mut runtime)?;
-                    if let Some(output) = exit {
-                        stdout.write_all(&bytes)?;
-                        stdout.flush()?;
-                        return Ok(output);
-                    }
-                    bytes
-                }
-                Event::Resize(w, h) => {
-                    // Coalesce resize storms (see the tokio driver): drain
-                    // queued events, process keys in order, and handle one
-                    // resize at the latest size.
-                    let (mut w, mut h) = (w, h);
-                    let mut bytes = Vec::new();
-                    let mut exited = None;
-                    while crossterm::event::poll(Duration::ZERO)? {
-                        match crossterm::event::read()? {
-                            Event::Resize(nw, nh) => (w, h) = (nw, nh),
-                            Event::Key(k)
-                                if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
-                            {
-                                let (b, e) = runtime.handle(InputEvent::Key(k));
-                                reject_effects(&mut runtime)?;
-                                bytes.extend_from_slice(&b);
-                                if e.is_some() {
-                                    exited = e;
-                                    break;
-                                }
-                            }
-                            Event::Paste(s) => {
-                                let (b, e) = runtime.handle(InputEvent::Paste(s));
-                                reject_effects(&mut runtime)?;
-                                bytes.extend_from_slice(&b);
-                                if e.is_some() {
-                                    exited = e;
-                                    break;
-                                }
-                            }
-                            Event::Mouse(m) => {
-                                let (b, e) = runtime.handle(InputEvent::Mouse(m));
-                                reject_effects(&mut runtime)?;
-                                bytes.extend_from_slice(&b);
-                                if e.is_some() {
-                                    exited = e;
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    if let Some(output) = exited {
-                        stdout.write_all(&bytes)?;
-                        stdout.flush()?;
-                        return Ok(output);
-                    }
-                    let (resize_bytes, resize_exit) =
-                        resize_with_report(&mut runtime, w, h, options.screen);
-                    reject_effects(&mut runtime)?;
-                    bytes.extend_from_slice(&resize_bytes);
-                    if let Some(output) = resize_exit {
-                        stdout.write_all(&bytes)?;
-                        stdout.flush()?;
-                        return Ok(output);
-                    }
-                    bytes
-                }
-                _ => Vec::new(),
             }
+
+            let (mut bytes, mut exit) = runtime.handle_batch(inputs);
+            reject_effects(&mut runtime)?;
+            if exit.is_none()
+                && let Some((w, h)) = resize
+            {
+                let (resize_bytes, resize_exit) =
+                    resize_with_report(&mut runtime, w, h, options.screen);
+                reject_effects(&mut runtime)?;
+                bytes.extend_from_slice(&resize_bytes);
+                exit = resize_exit;
+            }
+            if let Some(output) = exit {
+                stdout.write_all(&bytes)?;
+                stdout.flush()?;
+                return Ok(output);
+            }
+            bytes
         } else {
             // Animation tick.
             runtime.present()
