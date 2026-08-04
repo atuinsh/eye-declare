@@ -1,3 +1,8 @@
+## [0.7.0](https://github.com/atuinsh/eye-declare/compare/v0.6.5..v0.7.0) - 2026-08-04
+
+### ⛰️ Features
+
+- [**breaking**] Mouse events via the keymap fallthrough ([#56](https://github.com/atuinsh/eye-declare/issues/56)) - ([15ad057](https://github.com/atuinsh/eye-declare/commit/15ad057673e73d566036b24e999693d74da95eb5))
 ## [0.6.5](https://github.com/atuinsh/eye-declare/compare/v0.6.4..v0.6.5) - 2026-08-04
 
 ### ⛰️ Features
