@@ -1,3 +1,8 @@
+## [0.6.5](https://github.com/atuinsh/eye-declare/compare/v0.6.4..v0.6.5) - 2026-08-04
+
+### ⛰️ Features
+
+- Terminal capabilities for fullscreen TUIs ([#55](https://github.com/atuinsh/eye-declare/issues/55)) - ([9dd6574](https://github.com/atuinsh/eye-declare/commit/9dd6574f1218c08991f83ea6dc77042323962563))
 ## [0.6.4](https://github.com/atuinsh/eye-declare/compare/v0.6.3..v0.6.4) - 2026-07-29
 
 ### 🐛 Bug Fixes
