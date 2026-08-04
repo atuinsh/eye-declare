@@ -609,6 +609,16 @@ pub(crate) struct RawModeGuard {
 }
 
 impl RawModeGuard {
+    /// Hand mouse-capture teardown to the caller: returns whether capture
+    /// was on and marks it handled so `drop` won't disable or drain again.
+    /// The tokio driver needs this — its `EventStream`'s reader thread
+    /// holds crossterm's shared reader at drop time, so the guard's
+    /// `event::poll` drain would see nothing while in-flight reports leak
+    /// past it. The driver disables and drains through the stream instead.
+    pub(crate) fn take_mouse_capture(&mut self) -> bool {
+        std::mem::take(&mut self.mouse_capture)
+    }
+
     pub(crate) fn enable(
         keyboard: KeyboardProtocol,
         screen: ScreenMode,

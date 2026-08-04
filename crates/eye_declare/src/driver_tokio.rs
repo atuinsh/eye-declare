@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::future::poll_fn;
 use std::io::{self, Write};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,7 +49,7 @@ where
     let (tx, mut rx) = unbounded_channel::<A::Msg>();
     let mut stdout = io::stdout().lock();
 
-    let _guard = RawModeGuard::enable(options.keyboard, options.screen, options.mouse_capture)?;
+    let mut guard = RawModeGuard::enable(options.keyboard, options.screen, options.mouse_capture)?;
     if options.screen != crate::runtime::ScreenMode::AltScreen {
         crate::runtime::normalize_start_column();
     }
@@ -57,6 +58,7 @@ where
     stdout.write_all(&bytes)?;
     stdout.flush()?;
     if let Some(output) = init_exit {
+        shutdown_mouse_sync(&mut guard, &mut stdout);
         return Ok(output);
     }
     spawn_effects(runtime.take_effects(), &tx);
@@ -191,8 +193,58 @@ where
             stdout.flush()?;
         }
         if let Some(output) = exit {
+            shutdown_mouse(&mut guard, &mut stdout, &mut events).await;
             return Ok(output);
         }
+    }
+}
+
+/// Disable mouse capture and drain in-flight reports through the stream.
+///
+/// Between the exit and the terminal processing the disable, the terminal
+/// keeps emitting reports — a fast wheel that triggered the exit has
+/// dozens still in flight. Undrained, they land in the parent shell's
+/// input as escape-sequence garbage (and have been seen to wedge fragile
+/// emulators). The guard's own drop-time drain can't do this here: the
+/// stream's reader thread owns crossterm's shared reader, so synchronous
+/// `event::poll` sees nothing while the reports flow into the stream.
+/// Bounded: quiet for 5ms or 50ms total.
+async fn shutdown_mouse(
+    guard: &mut RawModeGuard,
+    stdout: &mut impl Write,
+    events: &mut crossterm::event::EventStream,
+) {
+    if !guard.take_mouse_capture() {
+        return;
+    }
+    let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(
+            Duration::from_millis(5),
+            poll_fn(|cx| Pin::new(&mut *events).poll_next(cx)),
+        )
+        .await
+        {
+            Ok(Some(_)) => {}
+            // Quiet, or the stream ended: done.
+            _ => break,
+        }
+    }
+}
+
+/// The pre-loop exit (`App::init` exited): no stream exists yet, so the
+/// synchronous drain works — no reader thread is holding the source.
+fn shutdown_mouse_sync(guard: &mut RawModeGuard, stdout: &mut impl Write) {
+    if !guard.take_mouse_capture() {
+        return;
+    }
+    let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
+    let deadline = std::time::Instant::now() + Duration::from_millis(50);
+    while std::time::Instant::now() < deadline
+        && matches!(crossterm::event::poll(Duration::from_millis(5)), Ok(true))
+    {
+        let _ = crossterm::event::read();
     }
 }
 
