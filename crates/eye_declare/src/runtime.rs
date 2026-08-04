@@ -412,46 +412,59 @@ where
 
         let bytes = if crossterm::event::poll(timeout)? {
             use crossterm::event::{Event, KeyEventKind};
-            // Coalesce everything already queued into one frame (wheel
-            // flicks and paste storms queue dozens of events; painting
-            // per event reads as lag). Input is processed in order,
-            // resizes collapse into one handled at the latest size.
-            let mut inputs: Vec<InputEvent> = Vec::new();
-            let mut resize: Option<(u16, u16)> = None;
+            // Coalesce everything already queued (wheel flicks and paste
+            // storms queue dozens of events; painting per event reads as
+            // lag), preserving arrival order: mouse hit-testing after a
+            // resize must see post-resize geometry, so only runs of
+            // CONSECUTIVE resizes collapse into one at the latest size.
+            enum Seg {
+                Inputs(Vec<InputEvent>),
+                Resize(u16, u16),
+            }
+            let mut segs: Vec<Seg> = Vec::new();
+            let mut drained = 0usize;
             let mut first = true;
-            while first || crossterm::event::poll(Duration::ZERO)? {
+            while first || (drained < 64 && crossterm::event::poll(Duration::ZERO)?) {
                 first = false;
-                match crossterm::event::read()? {
+                drained += 1;
+                let input = match crossterm::event::read()? {
                     Event::Key(k)
                         if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
                     {
-                        inputs.push(InputEvent::Key(k));
+                        InputEvent::Key(k)
                     }
-                    Event::Paste(s) => inputs.push(InputEvent::Paste(s)),
-                    Event::Mouse(m) => inputs.push(InputEvent::Mouse(m)),
-                    Event::Resize(w, h) => resize = Some((w, h)),
-                    _ => {}
-                }
-                if inputs.len() >= 64 {
-                    break;
+                    Event::Paste(s) => InputEvent::Paste(s),
+                    Event::Mouse(m) => InputEvent::Mouse(m),
+                    Event::Resize(w, h) => {
+                        if let Some(Seg::Resize(rw, rh)) = segs.last_mut() {
+                            (*rw, *rh) = (w, h);
+                        } else {
+                            segs.push(Seg::Resize(w, h));
+                        }
+                        continue;
+                    }
+                    _ => continue,
+                };
+                if let Some(Seg::Inputs(v)) = segs.last_mut() {
+                    v.push(input);
+                } else {
+                    segs.push(Seg::Inputs(vec![input]));
                 }
             }
 
-            let (mut bytes, mut exit) = runtime.handle_batch(inputs);
-            reject_effects(&mut runtime)?;
-            if exit.is_none()
-                && let Some((w, h)) = resize
-            {
-                let (resize_bytes, resize_exit) =
-                    resize_with_report(&mut runtime, w, h, options.screen);
+            let mut bytes = Vec::new();
+            for seg in segs {
+                let (seg_bytes, seg_exit) = match seg {
+                    Seg::Inputs(inputs) => runtime.handle_batch(inputs),
+                    Seg::Resize(w, h) => resize_with_report(&mut runtime, w, h, options.screen),
+                };
                 reject_effects(&mut runtime)?;
-                bytes.extend_from_slice(&resize_bytes);
-                exit = resize_exit;
-            }
-            if let Some(output) = exit {
-                stdout.write_all(&bytes)?;
-                stdout.flush()?;
-                return Ok(output);
+                bytes.extend_from_slice(&seg_bytes);
+                if let Some(output) = seg_exit {
+                    stdout.write_all(&bytes)?;
+                    stdout.flush()?;
+                    return Ok(output);
+                }
             }
             bytes
         } else {
