@@ -136,6 +136,14 @@ where
                                         break;
                                     }
                                 }
+                                Event::Mouse(m) => {
+                                    let (b, e) = runtime.handle(InputEvent::Mouse(m));
+                                    bytes.extend_from_slice(&b);
+                                    if e.is_some() {
+                                        exit = e;
+                                        break;
+                                    }
+                                }
                                 _ => {}
                             }
                         }

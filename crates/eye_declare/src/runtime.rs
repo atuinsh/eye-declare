@@ -438,6 +438,15 @@ where
                                     break;
                                 }
                             }
+                            Event::Mouse(m) => {
+                                let (b, e) = runtime.handle(InputEvent::Mouse(m));
+                                reject_effects(&mut runtime)?;
+                                bytes.extend_from_slice(&b);
+                                if e.is_some() {
+                                    exited = e;
+                                    break;
+                                }
+                            }
                             _ => {}
                         }
                     }
