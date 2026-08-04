@@ -2,7 +2,7 @@
 name = "eye_declare"
 description = "Inline terminal UIs for Rust: timeline-first, Elm-shaped, built on Ratatui"
 repository = "https://github.com/atuinsh/eye-declare"
-version = "0.6.5"
+version = "0.7.0"
 edition = "2024"
 license = "MIT"
 keywords = ["tui", "terminal", "inline", "cli", "elm"]
@@ -10,7 +10,7 @@ categories = ["command-line-interface"]
 
 [dependencies]
 crossterm = "0.29"
-eye_declare_engine = { version = "0.6.0", path = "../eye_declare_engine" }
+eye_declare_engine = { version = "0.7.0", path = "../eye_declare_engine" }
 futures-core = "0.3"
 pulldown-cmark = { version = "0.13", default-features = false, optional = true }
 ratatui-core = "0.1"

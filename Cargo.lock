@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "eye_declare"
-version = "0.6.5"
+version = "0.7.0"
 dependencies = [
  "async-stream",
  "criterion",
@@ -449,7 +449,7 @@ dependencies = [
 
 [[package]]
 name = "eye_declare_engine"
-version = "0.6.5"
+version = "0.7.0"
 dependencies = [
  "eye_declare_engine",
  "ratatui-core",
