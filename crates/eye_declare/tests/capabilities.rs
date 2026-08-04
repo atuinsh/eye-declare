@@ -117,3 +117,111 @@ fn cursor_style_changes_emit_decscusr_exactly_once() {
     let (bytes, _) = rt.process(Msg::Style(CursorStyle::DefaultUserShape));
     assert!(contains(&bytes, b"\x1b[0 q"));
 }
+
+/// A two-mode app for batch-dispatch semantics: 'm' toggles the mode, 'x'
+/// logs a different char per mode.
+mod batch {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use eye_declare::{
+        App, Ctx, Element, Focus, FocusHandle, InputEvent, Keymap, Runtime, key, keymap, text,
+    };
+
+    #[derive(Clone)]
+    enum Msg {
+        ToggleMode,
+        Log(char),
+    }
+
+    struct Modal {
+        focus: FocusHandle,
+        mode: bool,
+        log: Vec<char>,
+    }
+
+    impl App for Modal {
+        type Msg = Msg;
+        type Output = ();
+
+        fn update(&mut self, msg: Msg, _ctx: &mut Ctx<'_, Self>) {
+            match msg {
+                Msg::ToggleMode => self.mode = !self.mode,
+                Msg::Log(c) => self.log.push(c),
+            }
+        }
+
+        fn tail(&self) -> impl Element + '_ {
+            text(format!("{:?}", self.log))
+        }
+
+        fn keymap(&self) -> Keymap<Msg> {
+            let km = keymap().on(key(KeyCode::Char('m')), Msg::ToggleMode);
+            if self.mode {
+                km.on(key(KeyCode::Char('x')), Msg::Log('B'))
+            } else {
+                km.on(key(KeyCode::Char('x')), Msg::Log('a'))
+            }
+            .fallthrough(&self.focus, |_| Msg::Log('?'))
+        }
+
+        fn on_resize(&self, _w: u16, _h: u16) -> Option<Msg> {
+            None
+        }
+    }
+
+    fn modal() -> Modal {
+        let focus = Focus::new();
+        let handle = focus.handle();
+        handle.focus();
+        Modal {
+            focus: handle,
+            mode: false,
+            log: Vec::new(),
+        }
+    }
+
+    fn press(c: char) -> InputEvent {
+        InputEvent::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
+    }
+
+    fn count(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
+    }
+
+    #[test]
+    fn batch_dispatch_is_interleaved_with_updates() {
+        let mut rt = Runtime::new(modal(), 40, 24);
+        let _ = rt.startup();
+
+        // 'm' flips the mode mid-batch; the following 'x' must resolve
+        // under the NEW mode, exactly as if delivered one at a time.
+        let (_bytes, exit) = rt.handle_batch([press('x'), press('m'), press('x')]);
+        assert!(exit.is_none());
+        assert_eq!(rt.app().log, vec!['a', 'B']);
+    }
+
+    #[test]
+    fn a_batch_presents_exactly_once() {
+        let mut rt = Runtime::new(modal(), 40, 24);
+        let _ = rt.startup();
+
+        let (bytes, _) = rt.handle_batch((0..20).map(|_| press('x')));
+        // One synchronized-update frame for the whole burst.
+        assert_eq!(count(&bytes, b"\x1b[?2026h"), 1);
+        assert_eq!(rt.app().log.len(), 20);
+    }
+
+    #[test]
+    fn an_unmatched_batch_presents_nothing() {
+        let mut rt = Runtime::new(modal(), 40, 24);
+        let _ = rt.startup();
+        // Release events dispatch to nothing (no binding, fallthrough is
+        // for the focused handle — blur it first).
+        rt.app().focus.blur();
+        let (bytes, exit) = rt.handle_batch([press('z')]);
+        assert!(bytes.is_empty());
+        assert!(exit.is_none());
+    }
+}

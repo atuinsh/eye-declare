@@ -14,11 +14,19 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::focus::FocusHandle;
 
-/// A terminal input event as delivered to the app: key press or paste.
+/// A terminal input event as delivered to the app: key press, paste, or
+/// mouse event (the latter only when the driver runs with
+/// [`mouse_capture`](crate::RunOptions::mouse_capture)).
+///
+/// Non-exhaustive: keymaps resolve `Key` events; everything else reaches
+/// the app through [`fallthrough`](Keymap::fallthrough), so a wildcard arm
+/// there is both required and the natural place for future event kinds.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum InputEvent {
     Key(KeyEvent),
     Paste(String),
+    Mouse(crossterm::event::MouseEvent),
 }
 
 /// A key pattern for bindings.
@@ -229,6 +237,7 @@ mod tests {
                 }
             }
             InputEvent::Paste(_) => Msg::Edit('P'),
+            _ => Msg::Edit('?'),
         }
     }
 
@@ -278,6 +287,45 @@ mod tests {
         assert_eq!(
             km.dispatch(&InputEvent::Paste("hi".into())),
             Some(Msg::Edit('P'))
+        );
+    }
+
+    #[test]
+    fn mouse_events_reach_the_fallthrough() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        let focus = Focus::new();
+        let input = focus.handle();
+        input.focus();
+
+        let km: Keymap<&'static str> = keymap().fallthrough(&input, |ev| match ev {
+            InputEvent::Mouse(m) => match m.kind {
+                MouseEventKind::ScrollUp => "scroll-up",
+                MouseEventKind::ScrollDown => "scroll-down",
+                _ => "other-mouse",
+            },
+            _ => "not-mouse",
+        });
+
+        let scroll = |kind| {
+            InputEvent::Mouse(MouseEvent {
+                kind,
+                column: 3,
+                row: 5,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        assert_eq!(
+            km.dispatch(&scroll(MouseEventKind::ScrollUp)),
+            Some("scroll-up")
+        );
+        assert_eq!(
+            km.dispatch(&scroll(MouseEventKind::ScrollDown)),
+            Some("scroll-down")
+        );
+        assert_eq!(
+            km.dispatch(&scroll(MouseEventKind::Down(MouseButton::Left))),
+            Some("other-mouse")
         );
     }
 

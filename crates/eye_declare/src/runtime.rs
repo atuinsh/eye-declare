@@ -88,10 +88,45 @@ where
     /// message results, processes it. Returns the bytes to write and the
     /// app's output when it exited.
     pub fn handle(&mut self, event: InputEvent) -> (Vec<u8>, Option<A::Output>) {
-        match self.app.keymap().dispatch(&event) {
-            Some(msg) => self.process(msg),
-            None => (Vec::new(), None),
+        self.handle_batch(std::iter::once(event))
+    }
+
+    /// Feed a burst of input events, presenting once at the end — the
+    /// input-side analogue of [`process_batch`](Runtime::process_batch).
+    /// A wheel flick or paste storm that queued dozens of events becomes
+    /// one frame instead of one per event.
+    ///
+    /// Dispatch is interleaved: each event resolves against a freshly
+    /// derived keymap *after* the previous event's update, so a mid-batch
+    /// mode change dispatches the rest of the batch under the new mode.
+    /// Stops early if an update exits; if no event dispatched to a
+    /// message, nothing is presented and no bytes are returned.
+    pub fn handle_batch(
+        &mut self,
+        events: impl IntoIterator<Item = InputEvent>,
+    ) -> (Vec<u8>, Option<A::Output>) {
+        let mut bytes: Option<Vec<u8>> = None;
+        let mut exit = None;
+        for event in events {
+            if let Some(msg) = self.app.keymap().dispatch(&event) {
+                // Undelivered init bytes come first, taken only once a
+                // message actually lands (an all-unmatched batch must
+                // leave them pending, like `handle` always has).
+                let buf = bytes.get_or_insert_with(|| std::mem::take(&mut self.pending));
+                exit = self.apply_msg(msg, buf);
+                if exit.is_some() {
+                    break;
+                }
+            }
         }
+        let Some(mut bytes) = bytes else {
+            return (Vec::new(), None);
+        };
+        bytes.extend_from_slice(&self.present());
+        if exit.is_some() {
+            bytes.extend_from_slice(&self.timeline.finalize());
+        }
+        (bytes, exit)
     }
 
     /// Feed one message (from the keymap, or — in the async driver — from
@@ -312,6 +347,7 @@ pub enum ScreenMode {
 pub struct RunOptions {
     pub keyboard: KeyboardProtocol,
     pub screen: ScreenMode,
+    pub mouse_capture: bool,
 }
 
 impl RunOptions {
@@ -322,6 +358,15 @@ impl RunOptions {
 
     pub fn screen(mut self, screen: ScreenMode) -> Self {
         self.screen = screen;
+        self
+    }
+
+    /// Capture mouse events and deliver them as [`InputEvent::Mouse`]
+    /// through the keymap fallthrough. Off by default: capture takes over
+    /// the terminal's native selection/copy behavior, so only apps that
+    /// actually handle mouse events should request it.
+    pub fn mouse_capture(mut self, capture: bool) -> Self {
+        self.mouse_capture = capture;
         self
     }
 }
@@ -347,7 +392,7 @@ where
     let mut runtime = Runtime::new(app, width, height);
     let mut stdout = io::stdout().lock();
 
-    let _guard = RawModeGuard::enable(options.keyboard, options.screen)?;
+    let _guard = RawModeGuard::enable(options.keyboard, options.screen, options.mouse_capture)?;
     if options.screen != ScreenMode::AltScreen {
         normalize_start_column();
     }
@@ -367,78 +412,61 @@ where
 
         let bytes = if crossterm::event::poll(timeout)? {
             use crossterm::event::{Event, KeyEventKind};
-            match crossterm::event::read()? {
-                Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
-                    let (bytes, exit) = runtime.handle(InputEvent::Key(k));
-                    reject_effects(&mut runtime)?;
-                    if let Some(output) = exit {
-                        stdout.write_all(&bytes)?;
-                        stdout.flush()?;
-                        return Ok(output);
-                    }
-                    bytes
-                }
-                Event::Paste(s) => {
-                    let (bytes, exit) = runtime.handle(InputEvent::Paste(s));
-                    reject_effects(&mut runtime)?;
-                    if let Some(output) = exit {
-                        stdout.write_all(&bytes)?;
-                        stdout.flush()?;
-                        return Ok(output);
-                    }
-                    bytes
-                }
-                Event::Resize(w, h) => {
-                    // Coalesce resize storms (see the tokio driver): drain
-                    // queued events, process keys in order, and handle one
-                    // resize at the latest size.
-                    let (mut w, mut h) = (w, h);
-                    let mut bytes = Vec::new();
-                    let mut exited = None;
-                    while crossterm::event::poll(Duration::ZERO)? {
-                        match crossterm::event::read()? {
-                            Event::Resize(nw, nh) => (w, h) = (nw, nh),
-                            Event::Key(k)
-                                if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
-                            {
-                                let (b, e) = runtime.handle(InputEvent::Key(k));
-                                reject_effects(&mut runtime)?;
-                                bytes.extend_from_slice(&b);
-                                if e.is_some() {
-                                    exited = e;
-                                    break;
-                                }
-                            }
-                            Event::Paste(s) => {
-                                let (b, e) = runtime.handle(InputEvent::Paste(s));
-                                reject_effects(&mut runtime)?;
-                                bytes.extend_from_slice(&b);
-                                if e.is_some() {
-                                    exited = e;
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    if let Some(output) = exited {
-                        stdout.write_all(&bytes)?;
-                        stdout.flush()?;
-                        return Ok(output);
-                    }
-                    let (resize_bytes, resize_exit) =
-                        resize_with_report(&mut runtime, w, h, options.screen);
-                    reject_effects(&mut runtime)?;
-                    bytes.extend_from_slice(&resize_bytes);
-                    if let Some(output) = resize_exit {
-                        stdout.write_all(&bytes)?;
-                        stdout.flush()?;
-                        return Ok(output);
-                    }
-                    bytes
-                }
-                _ => Vec::new(),
+            // Coalesce everything already queued (wheel flicks and paste
+            // storms queue dozens of events; painting per event reads as
+            // lag), preserving arrival order: mouse hit-testing after a
+            // resize must see post-resize geometry, so only runs of
+            // CONSECUTIVE resizes collapse into one at the latest size.
+            enum Seg {
+                Inputs(Vec<InputEvent>),
+                Resize(u16, u16),
             }
+            let mut segs: Vec<Seg> = Vec::new();
+            let mut drained = 0usize;
+            let mut first = true;
+            while first || (drained < 64 && crossterm::event::poll(Duration::ZERO)?) {
+                first = false;
+                drained += 1;
+                let input = match crossterm::event::read()? {
+                    Event::Key(k)
+                        if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
+                    {
+                        InputEvent::Key(k)
+                    }
+                    Event::Paste(s) => InputEvent::Paste(s),
+                    Event::Mouse(m) => InputEvent::Mouse(m),
+                    Event::Resize(w, h) => {
+                        if let Some(Seg::Resize(rw, rh)) = segs.last_mut() {
+                            (*rw, *rh) = (w, h);
+                        } else {
+                            segs.push(Seg::Resize(w, h));
+                        }
+                        continue;
+                    }
+                    _ => continue,
+                };
+                if let Some(Seg::Inputs(v)) = segs.last_mut() {
+                    v.push(input);
+                } else {
+                    segs.push(Seg::Inputs(vec![input]));
+                }
+            }
+
+            let mut bytes = Vec::new();
+            for seg in segs {
+                let (seg_bytes, seg_exit) = match seg {
+                    Seg::Inputs(inputs) => runtime.handle_batch(inputs),
+                    Seg::Resize(w, h) => resize_with_report(&mut runtime, w, h, options.screen),
+                };
+                reject_effects(&mut runtime)?;
+                bytes.extend_from_slice(&seg_bytes);
+                if let Some(output) = seg_exit {
+                    stdout.write_all(&bytes)?;
+                    stdout.flush()?;
+                    return Ok(output);
+                }
+            }
+            bytes
         } else {
             // Animation tick.
             runtime.present()
@@ -576,10 +604,25 @@ fn keyboard_flags_to_push(
 pub(crate) struct RawModeGuard {
     keyboard_enhanced: bool,
     alt_screen: bool,
+    mouse_capture: bool,
 }
 
 impl RawModeGuard {
-    pub(crate) fn enable(keyboard: KeyboardProtocol, screen: ScreenMode) -> io::Result<Self> {
+    /// Hand mouse-capture teardown to the caller: returns whether capture
+    /// was on and marks it handled so `drop` won't disable or drain again.
+    /// The tokio driver needs this — its `EventStream`'s reader thread
+    /// holds crossterm's shared reader at drop time, so the guard's
+    /// `event::poll` drain would see nothing while in-flight reports leak
+    /// past it. The driver disables and drains through the stream instead.
+    pub(crate) fn take_mouse_capture(&mut self) -> bool {
+        std::mem::take(&mut self.mouse_capture)
+    }
+
+    pub(crate) fn enable(
+        keyboard: KeyboardProtocol,
+        screen: ScreenMode,
+        mouse_capture: bool,
+    ) -> io::Result<Self> {
         crossterm::terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
 
@@ -594,6 +637,9 @@ impl RawModeGuard {
         }
 
         let _ = crossterm::execute!(stdout, crossterm::event::EnableBracketedPaste);
+        if mouse_capture {
+            let _ = crossterm::execute!(stdout, crossterm::event::EnableMouseCapture);
+        }
 
         // Only probe when the protocol asks for it — the silent-fallback
         // contract of KeyboardProtocol::Enhanced.
@@ -611,6 +657,7 @@ impl RawModeGuard {
         Ok(Self {
             keyboard_enhanced,
             alt_screen,
+            mouse_capture,
         })
     }
 }
@@ -620,6 +667,25 @@ impl Drop for RawModeGuard {
         let mut stdout = io::stdout();
         if self.keyboard_enhanced {
             let _ = crossterm::execute!(stdout, crossterm::event::PopKeyboardEnhancementFlags);
+        }
+        if self.mouse_capture {
+            let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
+            // The terminal keeps sending reports until it processes the
+            // disable; anything already queued (a fast wheel queues dozens,
+            // possibly the very events that triggered the exit) would land
+            // in the parent shell's input as escape-sequence garbage — and
+            // has been seen to wedge fragile emulators outright. Drain
+            // until quiet, bounded, while raw mode is still on. Costs up to
+            // 50ms at teardown, only for capture-enabled apps.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+            while std::time::Instant::now() < deadline
+                && matches!(
+                    crossterm::event::poll(std::time::Duration::from_millis(5)),
+                    Ok(true)
+                )
+            {
+                let _ = crossterm::event::read();
+            }
         }
         if self.alt_screen {
             let _ = crossterm::execute!(stdout, crossterm::terminal::LeaveAlternateScreen);

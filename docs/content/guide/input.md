@@ -109,3 +109,26 @@ let options = RunOptions::default().keyboard(KeyboardProtocol::Custom {
     probe: false,
 });
 ```
+
+## Mouse
+
+With `RunOptions::default().mouse_capture(true)`, mouse events arrive as
+`InputEvent::Mouse` through the keymap [fallthrough](#fallthrough) —
+keymaps resolve key bindings only, so mouse handling is app logic like
+any other unclaimed event:
+
+```rust
+.fallthrough(&self.focus, |ev| match ev {
+    InputEvent::Mouse(m) => match m.kind {
+        MouseEventKind::ScrollUp => Msg::ScrollUp,
+        MouseEventKind::ScrollDown => Msg::ScrollDown,
+        _ => Msg::Noop,
+    },
+    // InputEvent is non-exhaustive; keep a wildcard arm.
+    _ => Msg::Noop,
+})
+```
+
+Capture is off by default because it takes over the terminal's native
+mouse behavior (text selection, copy). Leave it off unless the events
+buy the user something.

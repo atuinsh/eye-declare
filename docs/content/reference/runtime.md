@@ -40,6 +40,7 @@ restore the terminal on exit, including panic unwind.
 | ---------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `keyboard` | `KeyboardProtocol::Legacy` (default) / `Enhanced` / `Custom { flags, probe }` | `Enhanced` requests the kitty protocol's disambiguated escape codes (Shift+Enter vs Enter), falling back to legacy silently where unsupported. `Custom` pushes an explicit flag set; see [input](../../guide/input/). |
 | `screen`   | `ScreenMode::Inline` (default) / `AltScreen`                                | Where the app runs: the main screen (the timeline model), or the alternate screen for fullscreen apps.                                                                             |
+| `mouse_capture` | `bool` (default `false`)                                               | Capture mouse events and deliver them as `InputEvent::Mouse` through the keymap fallthrough. Capture takes over the terminal's native selection, so request it only if you handle the events. |
 
 The struct is `#[non_exhaustive]`; construct with `Default` and the
 setters.

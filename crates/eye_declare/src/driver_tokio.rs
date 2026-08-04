@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::future::poll_fn;
 use std::io::{self, Write};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,7 +49,7 @@ where
     let (tx, mut rx) = unbounded_channel::<A::Msg>();
     let mut stdout = io::stdout().lock();
 
-    let _guard = RawModeGuard::enable(options.keyboard, options.screen)?;
+    let mut guard = RawModeGuard::enable(options.keyboard, options.screen, options.mouse_capture)?;
     if options.screen != crate::runtime::ScreenMode::AltScreen {
         crate::runtime::normalize_start_column();
     }
@@ -57,6 +58,7 @@ where
     stdout.write_all(&bytes)?;
     stdout.flush()?;
     if let Some(output) = init_exit {
+        shutdown_mouse_sync(&mut guard, &mut stdout);
         return Ok(output);
     }
     spawn_effects(runtime.take_effects(), &tx);
@@ -66,95 +68,75 @@ where
 
     let mut events = crossterm::event::EventStream::new();
 
+    // Frame pacing: the stream delivers one event per poll through its
+    // reader thread, so an event burst (a wheel flick queues dozens)
+    // cannot be batched at the source — it arrives as a rapid trickle,
+    // and presenting per event paints every intermediate state, which
+    // reads as lag. Instead, events accumulate in `pending` and flush
+    // through `handle_batch` at most once per FRAME. An event arriving
+    // with the frame budget already spent (the common typing case)
+    // flushes immediately: pacing only engages during bursts.
+    const FRAME: Duration = Duration::from_millis(8);
+    let mut pending: Vec<InputEvent> = Vec::new();
+    let mut last_flush = tokio::time::Instant::now() - FRAME;
+
     loop {
         let anim = runtime.animation_interval();
+        let flush_at = (!pending.is_empty()).then(|| last_flush + FRAME);
 
-        let (bytes, exit) = tokio::select! {
+        enum Step<O> {
+            Out(Vec<u8>, Option<O>),
+            Flush,
+        }
+
+        let step = tokio::select! {
             biased;
 
             maybe_event = poll_fn(|cx| Pin::new(&mut events).poll_next(cx)) => {
                 use crossterm::event::{Event, KeyEventKind};
                 match maybe_event {
-                    Some(Ok(Event::Key(k)))
-                        if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
-                    {
-                        runtime.handle(InputEvent::Key(k))
-                    }
-                    Some(Ok(Event::Paste(s))) => runtime.handle(InputEvent::Paste(s)),
-                    // Coalesce resize storms: a drag delivers events
-                    // faster than an erase + repaint + cursor query per
-                    // event can keep up, which queues stale sizes and
-                    // multiplies position queries. Drain whatever is
-                    // already queued — keys are processed in order,
-                    // resizes collapse into one handled at the latest
-                    // size. Querying the cursor synchronously here is
-                    // safe: the EventStream's reader thread is parked
-                    // between events, so the shared crossterm reader is
-                    // free, and events arriving during the query are
-                    // re-queued, not dropped.
-                    Some(Ok(Event::Resize(w, h))) => {
-                        // Drain via the plain poll/read API, NOT the
-                        // stream: polling the stream to Pending wakes its
-                        // background reader, which then holds crossterm's
-                        // shared reader lock and starves the position
-                        // query below into its timeout.
-                        let mut queued = Vec::new();
-                        while queued.len() < 64
-                            && crossterm::event::poll(Duration::ZERO).unwrap_or(false)
+                    Some(Ok(first)) => match first {
+                        Event::Key(k)
+                            if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
                         {
-                            match crossterm::event::read() {
-                                Ok(ev) => queued.push(ev),
-                                Err(_) => break,
+                            pending.push(InputEvent::Key(k));
+                            Step::Flush
+                        }
+                        Event::Paste(s) => {
+                            pending.push(InputEvent::Paste(s));
+                            Step::Flush
+                        }
+                        Event::Mouse(m) => {
+                            pending.push(InputEvent::Mouse(m));
+                            Step::Flush
+                        }
+                        Event::Resize(w, h) => {
+                            // Resizes repaint the whole region and may
+                            // query the cursor; never paced. Flush pending
+                            // input first so it lays out against the state
+                            // the user last saw.
+                            let (mut bytes, mut exit) =
+                                runtime.handle_batch(pending.drain(..));
+                            last_flush = tokio::time::Instant::now();
+                            if exit.is_none() {
+                                let (resize_bytes, resize_exit) =
+                                    crate::runtime::resize_with_report(
+                                        &mut runtime,
+                                        w,
+                                        h,
+                                        options.screen,
+                                    );
+                                bytes.extend_from_slice(&resize_bytes);
+                                exit = resize_exit;
                             }
+                            Step::Out(bytes, exit)
                         }
-
-                        let (mut w, mut h) = (w, h);
-                        let mut bytes = Vec::new();
-                        let mut exit = None;
-                        for ev in queued {
-                            match ev {
-                                Event::Resize(nw, nh) => (w, h) = (nw, nh),
-                                Event::Key(k)
-                                    if matches!(
-                                        k.kind,
-                                        KeyEventKind::Press | KeyEventKind::Repeat
-                                    ) =>
-                                {
-                                    let (b, e) = runtime.handle(InputEvent::Key(k));
-                                    bytes.extend_from_slice(&b);
-                                    if e.is_some() {
-                                        exit = e;
-                                        break;
-                                    }
-                                }
-                                Event::Paste(s) => {
-                                    let (b, e) = runtime.handle(InputEvent::Paste(s));
-                                    bytes.extend_from_slice(&b);
-                                    if e.is_some() {
-                                        exit = e;
-                                        break;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        if exit.is_none() {
-                            let (resize_bytes, resize_exit) = crate::runtime::resize_with_report(
-                                &mut runtime,
-                                w,
-                                h,
-                                options.screen,
-                            );
-                            bytes.extend_from_slice(&resize_bytes);
-                            exit = resize_exit;
-                        }
-                        (bytes, exit)
-                    }
-                    Some(Ok(_)) => (Vec::new(), None),
+                        _ => Step::Out(Vec::new(), None),
+                    },
                     Some(Err(e)) => return Err(e),
                     // Terminal input ended (stdin closed): exit cleanly,
                     // with the shell handoff process_batch would have done.
-                    None => (runtime.finalize(), Some(A::Output::default())),
+                    None => Step::Out(runtime.finalize(), Some(A::Output::default())),
                 }
             }
 
@@ -168,10 +150,28 @@ where
                         Err(_) => break,
                     }
                 }
-                runtime.process_batch(batch)
+                let (bytes, exit) = runtime.process_batch(batch);
+                Step::Out(bytes, exit)
             }
 
-            _ = sleep_opt(anim), if anim.is_some() => (runtime.present(), None),
+            _ = sleep_opt(flush_at.map(|at| at.saturating_duration_since(tokio::time::Instant::now()))), if flush_at.is_some() => {
+                Step::Flush
+            }
+
+            _ = sleep_opt(anim), if anim.is_some() => Step::Out(runtime.present(), None),
+        };
+
+        let (bytes, exit) = match step {
+            Step::Out(bytes, exit) => (bytes, exit),
+            Step::Flush => {
+                if !pending.is_empty() && tokio::time::Instant::now() >= last_flush + FRAME {
+                    let out = runtime.handle_batch(pending.drain(..));
+                    last_flush = tokio::time::Instant::now();
+                    out
+                } else {
+                    (Vec::new(), None)
+                }
+            }
         };
 
         spawn_effects(runtime.take_effects(), &tx);
@@ -182,8 +182,58 @@ where
             stdout.flush()?;
         }
         if let Some(output) = exit {
+            shutdown_mouse(&mut guard, &mut stdout, &mut events).await;
             return Ok(output);
         }
+    }
+}
+
+/// Disable mouse capture and drain in-flight reports through the stream.
+///
+/// Between the exit and the terminal processing the disable, the terminal
+/// keeps emitting reports — a fast wheel that triggered the exit has
+/// dozens still in flight. Undrained, they land in the parent shell's
+/// input as escape-sequence garbage (and have been seen to wedge fragile
+/// emulators). The guard's own drop-time drain can't do this here: the
+/// stream's reader thread owns crossterm's shared reader, so synchronous
+/// `event::poll` sees nothing while the reports flow into the stream.
+/// Bounded: quiet for 5ms or 50ms total.
+async fn shutdown_mouse(
+    guard: &mut RawModeGuard,
+    stdout: &mut impl Write,
+    events: &mut crossterm::event::EventStream,
+) {
+    if !guard.take_mouse_capture() {
+        return;
+    }
+    let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(
+            Duration::from_millis(5),
+            poll_fn(|cx| Pin::new(&mut *events).poll_next(cx)),
+        )
+        .await
+        {
+            Ok(Some(_)) => {}
+            // Quiet, or the stream ended: done.
+            _ => break,
+        }
+    }
+}
+
+/// The pre-loop exit (`App::init` exited): no stream exists yet, so the
+/// synchronous drain works — no reader thread is holding the source.
+fn shutdown_mouse_sync(guard: &mut RawModeGuard, stdout: &mut impl Write) {
+    if !guard.take_mouse_capture() {
+        return;
+    }
+    let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture);
+    let deadline = std::time::Instant::now() + Duration::from_millis(50);
+    while std::time::Instant::now() < deadline
+        && matches!(crossterm::event::poll(Duration::from_millis(5)), Ok(true))
+    {
+        let _ = crossterm::event::read();
     }
 }
 
