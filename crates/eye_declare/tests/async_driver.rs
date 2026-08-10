@@ -195,3 +195,64 @@ async fn perform_delivers_one_message() {
     drop(tx);
     assert!(rx.recv().await.is_none());
 }
+
+/// The persist path end to end: work queued via `Ctx::persist` in the
+/// same update that exits still runs to completion — even with the
+/// message channel already closed, which is exactly the teardown case —
+/// and the tracker's `wait` resolves once it has.
+#[tokio::test]
+async fn persist_work_completes_after_exit() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Clone)]
+    struct Write;
+
+    struct Saver {
+        wrote: Arc<AtomicBool>,
+    }
+
+    impl App for Saver {
+        type Msg = Write;
+        type Output = ();
+
+        fn update(&mut self, Write: Write, ctx: &mut Ctx<'_, Self>) {
+            let wrote = Arc::clone(&self.wrote);
+            ctx.persist(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                wrote.store(true, Ordering::SeqCst);
+                Write
+            });
+            ctx.exit(());
+        }
+
+        fn tail(&self) -> impl Element + '_ {
+            text("saving")
+        }
+    }
+
+    let wrote = Arc::new(AtomicBool::new(false));
+    let mut rt = Runtime::new(
+        Saver {
+            wrote: Arc::clone(&wrote),
+        },
+        20,
+        24,
+    );
+    let (_, exit) = rt.process(Write);
+    assert_eq!(exit, Some(()));
+
+    let persists = rt.persists();
+    assert!(!persists.is_idle(), "queued work is tracked immediately");
+
+    // The channel's receiver is dropped up front: after an exit nobody
+    // reads messages, and the work must complete regardless.
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    drop(rx);
+    spawn_effects(rt.take_effects(), &tx);
+
+    tokio::time::timeout(Duration::from_secs(1), persists.wait())
+        .await
+        .expect("persist work must finish and release the tracker");
+    assert!(wrote.load(Ordering::SeqCst), "the write actually ran");
+}
