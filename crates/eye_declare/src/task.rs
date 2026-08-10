@@ -62,9 +62,17 @@ impl Cancel {
         }
     }
 
+    // Poison-proof, like PersistState: cancel() runs from Task::drop,
+    // including on unwind paths, where a poisoned mutex would escalate
+    // into a double panic — and a stored waker is valid regardless of
+    // who panicked.
+    fn waker(&self) -> std::sync::MutexGuard<'_, Option<Waker>> {
+        self.waker.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     pub(crate) fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
-        if let Some(waker) = self.waker.lock().unwrap().take() {
+        if let Some(waker) = self.waker().take() {
             waker.wake();
         }
     }
@@ -94,7 +102,7 @@ impl Future for Cancelled {
         if self.cancel.is_cancelled() {
             return Poll::Ready(());
         }
-        *self.cancel.waker.lock().unwrap() = Some(cx.waker().clone());
+        *self.cancel.waker() = Some(cx.waker().clone());
         // Re-check after storing the waker to close the race with a
         // concurrent cancel() that ran between the check and the store.
         if self.cancel.is_cancelled() {
