@@ -198,6 +198,15 @@ where
 /// stream's reader thread owns crossterm's shared reader, so synchronous
 /// `event::poll` sees nothing while the reports flow into the stream.
 /// Bounded: quiet for 5ms or 50ms total.
+///
+/// The spray is contiguous, so the first non-mouse event ends the drain:
+/// bytes not yet read stay in the tty for the shell. The cap is coarser
+/// than one event, though — crossterm reads the tty in chunks (up to
+/// 1KiB) and queues everything it parses, so whatever shared a chunk
+/// with that first non-mouse event is consumed along with it and cannot
+/// be handed back (ttys have no peek, and TIOCSTI is disabled on modern
+/// kernels). A true byte-granular drain requires owning the input path
+/// instead of reading through crossterm.
 async fn shutdown_mouse(
     guard: &mut RawModeGuard,
     stdout: &mut impl Write,
@@ -215,8 +224,8 @@ async fn shutdown_mouse(
         )
         .await
         {
-            Ok(Some(_)) => {}
-            // Quiet, or the stream ended: done.
+            Ok(Some(Ok(crossterm::event::Event::Mouse(_)))) => {}
+            // Quiet, a non-mouse event, a read error, or stream end: done.
             _ => break,
         }
     }
@@ -224,6 +233,7 @@ async fn shutdown_mouse(
 
 /// The pre-loop exit (`App::init` exited): no stream exists yet, so the
 /// synchronous drain works — no reader thread is holding the source.
+/// Stops at the first non-mouse event, like [`shutdown_mouse`].
 fn shutdown_mouse_sync(guard: &mut RawModeGuard, stdout: &mut impl Write) {
     if !guard.take_mouse_capture() {
         return;
@@ -233,7 +243,12 @@ fn shutdown_mouse_sync(guard: &mut RawModeGuard, stdout: &mut impl Write) {
     while std::time::Instant::now() < deadline
         && matches!(crossterm::event::poll(Duration::from_millis(5)), Ok(true))
     {
-        let _ = crossterm::event::read();
+        if !matches!(
+            crossterm::event::read(),
+            Ok(crossterm::event::Event::Mouse(_))
+        ) {
+            break;
+        }
     }
 }
 
