@@ -1,3 +1,17 @@
+## [0.7.1](https://github.com/atuinsh/eye-declare/compare/v0.7.0..v0.7.1) - 2026-08-10
+
+### ⛰️ Features
+
+- Durable persist effects and Mailbox handoff ([#58](https://github.com/atuinsh/eye-declare/issues/58)) - ([8a46089](https://github.com/atuinsh/eye-declare/commit/8a46089181c6d6f9dea0259d86fb5093e795d21b))
+
+### 🐛 Bug Fixes
+
+- Poison-proof Cancel's waker lock ([#59](https://github.com/atuinsh/eye-declare/issues/59)) - ([856b418](https://github.com/atuinsh/eye-declare/commit/856b41844a88b5e6e315e52814d4b4a1099bfd1b))
+- Stop teardown drains at the first non-mouse event ([#57](https://github.com/atuinsh/eye-declare/issues/57)) - ([d3a246b](https://github.com/atuinsh/eye-declare/commit/d3a246b22e7c3965e4e99cbc70381c84d561a09d))
+
+### 📚 Documentation
+
+- The book no longer claims inline-only rendering ([#60](https://github.com/atuinsh/eye-declare/issues/60)) - ([0bbeb0a](https://github.com/atuinsh/eye-declare/commit/0bbeb0ab03080e14dbd73f28f61c72f7008d920f))
 ## [0.7.0](https://github.com/atuinsh/eye-declare/compare/v0.6.5..v0.7.0) - 2026-08-04
 
 ### ⛰️ Features
