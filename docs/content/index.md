@@ -1,17 +1,19 @@
 ---
 title: eye-declare
-description: Inline terminal UIs for Rust
+description: Inline-first terminal UIs for Rust
 ---
 
 # eye-declare
 
-A library for building inline terminal UIs in Rust: interfaces that live in
-your terminal's normal flow, where finished output scrolls into native
-scrollback and only a small live region updates in place.
+A library for building inline-first terminal UIs in Rust: interfaces that
+live in your terminal's normal flow, where finished output scrolls into
+native scrollback and only a small live region updates in place.
 
 eye-declare is built for CLI tools, AI agents, and interactive prompts: the
 programs where output accumulates and history should stay visible, exactly as
-if the program had printed it.
+if the program had printed it. When an app needs the whole terminal instead,
+the same model runs fullscreen on the
+[alternate screen](/book/reference/runtime/#fullscreen-the-alt-screen).
 
 ## Rust Docs
 

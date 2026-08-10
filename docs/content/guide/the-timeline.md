@@ -72,3 +72,13 @@ happens to your shell prompt history. Only the live tail is erased and
 re-rendered at the new width. If a piece of output should stay
 width-responsive for a while, keep it in the tail longer; push it when that
 stops mattering.
+
+## When there is no timeline
+
+Everything above describes inline mode. On the
+[alternate screen](../../reference/runtime/#fullscreen-the-alt-screen)
+(`ScreenMode::AltScreen`) there is no scrollback to commit into: the tail
+*is* the screen, sized to the terminal via `App::on_resize`, and `ctx.push`
+loses its meaning. The model, `update`, and `tail` are unchanged — a
+fullscreen eye-declare app is an inline app whose tail grew to fill the
+terminal.

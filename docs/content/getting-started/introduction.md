@@ -58,12 +58,23 @@ messages from tasks ─┼─▶ update(&mut model, msg, ctx) ─▶ ctx.push(bl
 The model is a plain struct. `update` takes `&mut self`; `tail` takes
 `&self`. The borrow checker enforces the discipline for free.
 
-## What it's not
+## Inline first, fullscreen too
 
-eye-declare renders inline only. If you want a full-screen, alternate-screen
-application, use [Ratatui](https://ratatui.rs) directly — eye-declare is
-built on Ratatui's primitives and hands you its `Buffer` and `Style` types,
-but it deliberately does not do full-screen layout.
+The timeline is the reason eye-declare exists, and inline is its native
+mode. But the same app can take over the whole terminal:
+`ScreenMode::AltScreen` runs it on the alternate screen, with the tail as
+the entire screen — same model, same `update`, same `tail`, sized to the
+terminal via `App::on_resize`. An app can even choose per invocation, the
+way a shell-history search runs inline at a configured height but goes
+fullscreen on a short terminal. The
+[runtime reference](../../reference/runtime/#fullscreen-the-alt-screen)
+covers what changes — mostly that scrollback, and with it `ctx.push`,
+stops meaning anything.
+
+What eye-declare still isn't: a component-tree framework. It's built on
+[Ratatui](https://ratatui.rs)'s primitives and hands you its `Buffer` and
+`Style` types — Ratatui widgets render directly into elements — but state
+lives in your model, not in a retained tree, in either screen mode.
 
 Continue to [installation](../installation/), or read
 [the timeline](../../guide/the-timeline/) for the semantics that follow from
