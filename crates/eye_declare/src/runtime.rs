@@ -676,7 +676,11 @@ impl Drop for RawModeGuard {
             // in the parent shell's input as escape-sequence garbage — and
             // has been seen to wedge fragile emulators outright. Drain
             // until quiet, bounded, while raw mode is still on. Costs up to
-            // 50ms at teardown, only for capture-enabled apps.
+            // 50ms at teardown, only for capture-enabled apps. The spray is
+            // contiguous, so the first non-mouse event ends the drain,
+            // leaving unread bytes in the tty for the shell — though
+            // crossterm's chunked reads mean anything it already buffered
+            // is lost with it (see shutdown_mouse in the tokio driver).
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
             while std::time::Instant::now() < deadline
                 && matches!(
@@ -684,7 +688,12 @@ impl Drop for RawModeGuard {
                     Ok(true)
                 )
             {
-                let _ = crossterm::event::read();
+                if !matches!(
+                    crossterm::event::read(),
+                    Ok(crossterm::event::Event::Mouse(_))
+                ) {
+                    break;
+                }
             }
         }
         if self.alt_screen {
