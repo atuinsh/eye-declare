@@ -7,7 +7,7 @@ use futures_core::Stream;
 use crate::element::Element;
 use crate::input::Keymap;
 use crate::subscription::Subscriptions;
-use crate::task::{Effect, Task, spawn_effect, spawn_once_effect};
+use crate::task::{Effect, PersistTracker, Task, spawn_effect, spawn_once_effect};
 use crate::timeline::Timeline;
 
 /// An inline application. The implementing struct IS the model: `update`
@@ -78,6 +78,7 @@ pub struct Ctx<'a, A: App> {
     pub(crate) timeline: &'a mut Timeline,
     pub(crate) output: &'a mut Vec<u8>,
     pub(crate) effects: &'a mut Vec<Effect<A::Msg>>,
+    pub(crate) persists: &'a PersistTracker,
     pub(crate) exit: Option<A::Output>,
 }
 
@@ -112,6 +113,28 @@ impl<A: App> Ctx<'_, A> {
         let (effect, task) = spawn_once_effect(future);
         self.effects.push(effect);
         task
+    }
+
+    /// Fire-and-forget work the driver must not abandon: like
+    /// [`perform`](Ctx::perform) + [`Task::detach`], but tracked — the
+    /// driver waits for it at teardown before the run loop returns. For
+    /// effects with durability requirements (a database write, a file
+    /// save) where a quick exit would otherwise race the work against
+    /// process shutdown and silently lose it.
+    ///
+    /// No handle is returned: work that must complete is uncancellable by
+    /// definition. The future's message is delivered normally while the
+    /// app runs and dropped after it exits. Requires an async driver, like
+    /// [`spawn`](Ctx::spawn); the wait is bounded only if the driver's
+    /// options say so (see `RunOptions::persist_grace`).
+    pub fn persist(&mut self, future: impl Future<Output = A::Msg> + Send + 'static) {
+        let guard = self.persists.guard();
+        let (effect, task) = spawn_once_effect(async move {
+            let _guard = guard;
+            future.await
+        });
+        task.detach();
+        self.effects.push(effect);
     }
 
     /// End the run loop; it returns this value after teardown.

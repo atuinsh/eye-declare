@@ -59,6 +59,61 @@ Msg::Chunk(delta) => {
 }
 ```
 
+## Durable work
+
+Cancel-on-drop has an inverse hazard: work that must *not* die with the
+app. A delete the user confirmed, a file save, a config write — if the
+run loop exits while that future is in flight, a detached task dies with
+the process and the write is silently lost.
+
+`ctx.persist` is `perform` + `detach` for exactly that work: no `Task` is
+returned (work that must complete is uncancellable by definition), and
+the driver waits for every persist future at teardown, before the run
+loop returns:
+
+```rust
+Msg::Delete(entry) => {
+    self.entries.remove(&entry);           // optimistic UI
+    let store = self.store.clone();
+    ctx.persist(async move {
+        store.delete(entry).await;         // survives an immediate exit
+        Msg::DeleteDone
+    });
+}
+```
+
+The message still delivers normally while the app runs, and is dropped
+after exit. By default the teardown wait is unbounded; cap it with
+`RunOptions::persist_grace` when a wedged resource must not hang the
+exit. Custom drivers get the same via `Runtime::persists()` — spawn the
+final effects, then `.wait().await` the tracker.
+
+## Handing values to spawned work
+
+Moving a value *into* a spawned task couples its delivery to that task's
+survival: if a keystroke replaces (cancels) the task before it runs, the
+value is dropped with it. The classic symptom is a mode switch the UI
+shows but the backend never received.
+
+`Mailbox<T>` decouples them — a shared slot where `update` posts and
+whichever task actually runs takes:
+
+```rust
+struct Model { pending_engine: Mailbox<Engine>, /* … */ }
+
+// update: park the swap; any future query installs it.
+Msg::CycleMode => self.pending_engine.post(new_engine),
+
+// inside the spawned query, under whatever lock guards the backend:
+if let Some(engine) = pending_engine.take() {
+    backend.engine = engine;
+}
+```
+
+A cancelled task never reaches `take`, so the value simply waits for the
+next one. Posting replaces an undelivered value — the slot is
+latest-wins state, not a queue.
+
 ## Subscriptions
 
 Recurring inputs are declared, not managed. After every update the driver

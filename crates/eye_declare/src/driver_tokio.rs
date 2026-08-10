@@ -59,6 +59,16 @@ where
     stdout.flush()?;
     if let Some(output) = init_exit {
         shutdown_mouse_sync(&mut guard, &mut stdout);
+        // An init that persisted work and exited still gets its writes:
+        // spawn the queued effects and wait. (Cancellable effects queued
+        // alongside them start too, but their tasks die with the app —
+        // the pre-persist behavior of never spawning them only held when
+        // nothing needed spawning.)
+        let persists = runtime.persists();
+        if !persists.is_idle() {
+            spawn_effects(runtime.take_effects(), &tx);
+            wait_for_persists(&persists, options.persist_grace).await;
+        }
         return Ok(output);
     }
     spawn_effects(runtime.take_effects(), &tx);
@@ -80,7 +90,13 @@ where
     let mut pending: Vec<InputEvent> = Vec::new();
     let mut last_flush = tokio::time::Instant::now() - FRAME;
 
-    loop {
+    // The loop runs in an inner block so that every way out of it —
+    // a clean exit, stdin closing, or an I/O error from the terminal —
+    // flows through the persist wait below. An early `return` here would
+    // abandon tracked writes to process shutdown, which is exactly what
+    // `Ctx::persist` promises cannot happen.
+    let result: io::Result<A::Output> = async {
+        loop {
         let anim = runtime.animation_interval();
         let flush_at = (!pending.is_empty()).then(|| last_flush + FRAME);
 
@@ -174,17 +190,37 @@ where
             }
         };
 
-        spawn_effects(runtime.take_effects(), &tx);
-        subs.sync(runtime.app().subscriptions());
+            spawn_effects(runtime.take_effects(), &tx);
+            subs.sync(runtime.app().subscriptions());
 
-        if !bytes.is_empty() {
-            stdout.write_all(&bytes)?;
-            stdout.flush()?;
+            if !bytes.is_empty() {
+                stdout.write_all(&bytes)?;
+                stdout.flush()?;
+            }
+            if let Some(output) = exit {
+                shutdown_mouse(&mut guard, &mut stdout, &mut events).await;
+                return Ok(output);
+            }
         }
-        if let Some(output) = exit {
-            shutdown_mouse(&mut guard, &mut stdout, &mut events).await;
-            return Ok(output);
+    }
+    .await;
+
+    // The exiting update's effects were spawned before the loop returned;
+    // wait for any persist work among them (and any still in flight from
+    // earlier updates) before abandoning the runtime — on the error paths
+    // too, which is why this sits outside the block.
+    wait_for_persists(&runtime.persists(), options.persist_grace).await;
+    result
+}
+
+/// Wait for [`Ctx::persist`](crate::Ctx::persist) work at teardown,
+/// bounded by the configured grace period.
+async fn wait_for_persists(persists: &crate::task::PersistTracker, grace: Option<Duration>) {
+    match grace {
+        Some(grace) => {
+            let _ = tokio::time::timeout(grace, persists.wait()).await;
         }
+        None => persists.wait().await,
     }
 }
 

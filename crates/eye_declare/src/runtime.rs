@@ -11,7 +11,7 @@ use std::time::Duration;
 use crate::app::{App, Ctx};
 use crate::element::Element;
 use crate::input::InputEvent;
-use crate::task::Effect;
+use crate::task::{Effect, PersistTracker};
 use crate::timeline::Timeline;
 
 /// The pure core of the run loop: dispatch → update → flush pushes →
@@ -27,6 +27,7 @@ pub struct Runtime<A: App> {
     /// An exit requested from [`App::init`], delivered via
     /// [`startup`](Runtime::startup).
     init_exit: Option<A::Output>,
+    persists: PersistTracker,
 }
 
 impl<A: App> Runtime<A>
@@ -40,10 +41,12 @@ where
         let mut timeline = Timeline::new(width, terminal_height);
         let mut pending = Vec::new();
         let mut effects = Vec::new();
+        let persists = PersistTracker::new();
         let mut ctx = Ctx {
             timeline: &mut timeline,
             output: &mut pending,
             effects: &mut effects,
+            persists: &persists,
             exit: None,
         };
         app.init(&mut ctx);
@@ -55,6 +58,7 @@ where
                 timeline: &mut timeline,
                 output: &mut pending,
                 effects: &mut effects,
+                persists: &persists,
                 exit: None,
             };
             app.update(msg, &mut ctx);
@@ -67,6 +71,7 @@ where
             effects,
             pending,
             init_exit,
+            persists,
         }
     }
 
@@ -171,6 +176,7 @@ where
             timeline: &mut self.timeline,
             output: bytes,
             effects: &mut self.effects,
+            persists: &self.persists,
             exit: None,
         };
         self.app.update(msg, &mut ctx);
@@ -182,6 +188,12 @@ where
     /// [`process`](Runtime::process).
     pub fn take_effects(&mut self) -> Vec<Effect<A::Msg>> {
         std::mem::take(&mut self.effects)
+    }
+
+    /// The tracker for [`Ctx::persist`] work. Drivers wait on it at
+    /// teardown so persist effects are never abandoned mid-flight.
+    pub fn persists(&self) -> PersistTracker {
+        self.persists.clone()
     }
 
     /// Re-present the live tail (also called on animation ticks).
@@ -348,6 +360,7 @@ pub struct RunOptions {
     pub keyboard: KeyboardProtocol,
     pub screen: ScreenMode,
     pub mouse_capture: bool,
+    pub persist_grace: Option<Duration>,
 }
 
 impl RunOptions {
@@ -367,6 +380,16 @@ impl RunOptions {
     /// actually handle mouse events should request it.
     pub fn mouse_capture(mut self, capture: bool) -> Self {
         self.mouse_capture = capture;
+        self
+    }
+
+    /// Cap how long the driver waits for [`Ctx::persist`](crate::Ctx::persist)
+    /// work at teardown. Default: no cap — persist effects are assumed
+    /// short. Set a grace period when a wedged resource (a stuck database,
+    /// an unreachable daemon) must not hang the exit indefinitely; work
+    /// still running when it elapses is abandoned.
+    pub fn persist_grace(mut self, grace: Duration) -> Self {
+        self.persist_grace = Some(grace);
         self
     }
 }
