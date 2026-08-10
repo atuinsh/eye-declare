@@ -2,7 +2,7 @@
 name = "eye_declare_engine"
 description = "Inline terminal rendering engine: frame diffing, ANSI escape generation, scrollback-aware output"
 repository = "https://github.com/atuinsh/eye-declare"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 license = "MIT"
 
