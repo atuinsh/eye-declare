@@ -17,7 +17,7 @@
 
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll, Waker};
 
 use futures_core::Stream;
@@ -152,6 +152,15 @@ impl PersistTracker {
     }
 }
 
+impl PersistState {
+    // Poison-proof: this lock is taken from a Drop that runs on unwind
+    // paths, where a poisoned mutex would escalate into a double panic —
+    // and a stored waker is valid regardless of who panicked.
+    fn waker(&self) -> std::sync::MutexGuard<'_, Option<Waker>> {
+        self.waker.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// Held across a persist future; Drop marks the work complete even if the
 /// future panicked or was dropped by a dying executor.
 pub(crate) struct PersistGuard {
@@ -161,7 +170,7 @@ pub(crate) struct PersistGuard {
 impl Drop for PersistGuard {
     fn drop(&mut self) {
         if self.state.count.fetch_sub(1, Ordering::SeqCst) == 1
-            && let Some(waker) = self.state.waker.lock().unwrap().take()
+            && let Some(waker) = self.state.waker().take()
         {
             waker.wake();
         }
@@ -180,7 +189,7 @@ impl Future for PersistsDone {
         if self.state.count.load(Ordering::SeqCst) == 0 {
             return Poll::Ready(());
         }
-        *self.state.waker.lock().unwrap() = Some(cx.waker().clone());
+        *self.state.waker() = Some(cx.waker().clone());
         // Re-check after storing the waker to close the race with a
         // concurrent final guard drop between the check and the store.
         if self.state.count.load(Ordering::SeqCst) == 0 {
